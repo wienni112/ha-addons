@@ -1,26 +1,24 @@
 ARG BUILD_FROM
-FROM $BUILD_FROM
+FROM ${BUILD_FROM}
 
-# shell + certs
-RUN apk add --no-cache ca-certificates curl
+RUN apk add --no-cache ca-certificates curl tar
 
-# MediaMTX Version (kannst du später einfach hochdrehen)
+# Wähle eine Version (v1.9.0 geht, du kannst auch z.B. v1.16.0 nehmen)
 ARG MEDIATEK_VERSION=v1.9.0
 ARG TARGETARCH
 ARG TARGETVARIANT
 
-# Architektur-Mapping für bluenviron Releases
-# amd64 -> linux_amd64
-# aarch64 -> linux_arm64
-# armv7 -> linux_armv7
 RUN set -eux; \
   case "${TARGETARCH}${TARGETVARIANT}" in \
-    "amd64")   ARCH="linux_amd64" ;; \
-    "arm64")   ARCH="linux_arm64" ;; \
-    "armv7")   ARCH="linux_armv7" ;; \
+    "amd64") ARCH="linux_amd64" ;; \
+    "arm64") ARCH="linux_arm64" ;; \
+    "armv7") ARCH="linux_armv7" ;; \
     *) echo "Unsupported arch: ${TARGETARCH}${TARGETVARIANT}" && exit 1 ;; \
   esac; \
-  curl -fsSL -o /tmp/mediamtx.tar.gz "https://github.com/bluenviron/mediamtx/releases/download/${MEDIATEK_VERSION}/mediamtx_${MEDIATEK_VERSION#v}_${ARCH}.tar.gz"; \
+  VER="${MEDIATEK_VERSION#v}"; \
+  URL="https://github.com/bluenviron/mediamtx/releases/download/${MEDIATEK_VERSION}/mediamtx_v${VER}_${ARCH}.tar.gz"; \
+  echo "Downloading: ${URL}"; \
+  curl -fL -o /tmp/mediamtx.tar.gz "${URL}"; \
   tar -xzf /tmp/mediamtx.tar.gz -C /usr/bin mediamtx; \
   chmod +x /usr/bin/mediamtx; \
   rm -f /tmp/mediamtx.tar.gz
@@ -28,5 +26,5 @@ RUN set -eux; \
 COPY run.sh /run.sh
 RUN chmod a+x /run.sh
 
-EXPOSE 8554 8888 8889 8890
+EXPOSE 8554 8888 8889
 CMD [ "/run.sh" ]
