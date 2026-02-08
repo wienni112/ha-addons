@@ -4,7 +4,7 @@ FROM ${BUILD_FROM}
 RUN apk add --no-cache ca-certificates curl tar
 
 # Wähle eine Version (v1.9.0 geht, du kannst auch z.B. v1.16.0 nehmen)
-ARG MEDIATEK_VERSION=v1.9.0
+ARG MEDIATEK_VERSION=v1.15.6
 ARG TARGETARCH
 ARG TARGETVARIANT
 
