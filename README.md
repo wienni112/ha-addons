@@ -1,86 +1,85 @@
-#############################################
-# MediaMTX main configuration
-#############################################
+# Wienni112 Home Assistant Add-ons
 
-logLevel: info
+Dieses Repository enthält eigene Home Assistant OS Add-ons für den Einsatz im Homelab.
 
-# Listen on all interfaces
-rtspAddress: :8554
-hlsAddress: :8888
-webrtcAddress: :8889
+Der Fokus liegt auf:
 
-# WebRTC low latency
-webrtcAllowOrigin: "*"
+- Medien-Streaming (IP-Kameras / IPTV)
+- Netzwerk-isolierten Diensten (VLAN Setups)
+- saubere Integration in Home Assistant OS
 
-#############################################
-# Optional authentication (uncomment if needed)
-#############################################
+Alle Add-ons sind für HAOS gebaut und werden direkt über den Add-on Store installiert.
 
-# authMethod: internal
-# authInternalUsers:
-#   - user: viewer
-#     pass: changeme
-#     permissions:
-#       - action: read
+---
 
-#############################################
-# Global defaults
-#############################################
+## 📦 Enthaltene Add-ons
 
-readTimeout: 10s
-writeTimeout: 10s
-writeQueueSize: 512
+### 🎥 MediaMTX
 
-#############################################
-# Streams / Paths
-#############################################
+Universeller Streaming-Server für:
 
-paths:
+- RTSP
+- HLS (Browser / Smart TV)
+- WebRTC (Low Latency)
+- UDP / Multicast Ingest
 
-  #################################################
-  # IP Cameras (RTSP Ingest)
-  #################################################
+Typische Use-Cases:
 
-  cam_einfahrt:
-    source: rtsp://USER:PASS@172.22.15.10:554/STREAM
-    sourceProtocol: tcp
-    runOnReady: echo "Camera Einfahrt connected"
+- IP-Kameras zentral verteilen
+- IPTV lokal spiegeln
+- Multicast → Unicast
+- Streams für Home Assistant, VLC, Browser und TVs bereitstellen
 
-  cam_garten:
-    source: rtsp://USER:PASS@172.22.15.11:554/STREAM
-    sourceProtocol: tcp
+---
 
-  #################################################
-  # IPTV via HLS (Provider / xTeVe / Playlist)
-  #################################################
+## 🚀 Installation
 
-  rtl:
-    source: https://iptv-provider.example/rtl.m3u8
+### Repository in Home Assistant hinzufügen
 
-  zdf:
-    source: https://iptv-provider.example/zdf.m3u8
+In Home Assistant:
 
-  #################################################
-  # Multicast IPTV (SAT>IP / Telekom / etc.)
-  #################################################
+Einstellungen → Add-ons → Add-on Store → ⋮ → Repositories
 
-  ard_multicast:
-    source: udp://239.0.0.1:10000
 
-  zdf_multicast:
-    source: udp://239.0.0.2:10000
+Repository URL hinzufügen:
 
-#############################################
-# Example URLs after setup
-#############################################
+https://github.com/wienni112/ha-addons
 
-# RTSP:
-# rtsp://HA_IP:8554/cam_einfahrt
-# rtsp://HA_IP:8554/rtl
 
-# HLS (Browser / Smart TV):
-# http://HA_IP:8888/cam_einfahrt
-# http://HA_IP:8888/zdf
+Danach erscheinen die Add-ons im Store.
 
-# WebRTC (Ultra low latency):
-# http://HA_IP:8889
+---
+
+## 🧠 Design-Prinzip
+
+Dieses Repository folgt einem zentralen Streaming-Ansatz:
+
+Kameras / IPTV
+|
+v
+MediaMTX
+|
++--> Home Assistant
++--> Browser
++--> VLC
++--> Smart TVs
+
+
+Quellen bleiben isoliert (z.B. eigenes Kamera-VLAN), Clients greifen nur auf MediaMTX zu.
+
+---
+
+## 📄 Lizenz
+
+Die einzelnen Add-ons können eigene Lizenzen haben.
+
+MediaMTX selbst steht unter MIT License.
+
+Dieses Repository stellt nur die Home Assistant Integration bereit.
+
+---
+
+## ✍ Maintainer
+
+DoubleU
+https://github.com/wienni112
