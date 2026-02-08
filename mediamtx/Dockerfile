@@ -21,7 +21,8 @@ RUN set -eux; \
   tar -xzf /tmp/mediamtx.tar.gz -C /usr/bin mediamtx; \
   chmod +x /usr/bin/mediamtx; \
   rm -f /tmp/mediamtx.tar.gz
-
+  
+COPY mediamtx.yml /etc/mediamtx.yml
 COPY run.sh /run.sh
 RUN chmod +x /run.sh
 
