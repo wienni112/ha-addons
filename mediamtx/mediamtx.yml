@@ -1,7 +1,13 @@
 logLevel: info
 
-rtspAddress: :8554
-hlsAddress: :8888
-webrtcAddress: :8889
+rtsp:
+  enabled: yes
+  address: :8554
+
+hls:
+  enabled: yes
+
+webrtc:
+  enabled: yes
 
 paths: {}
