@@ -1,0 +1,7 @@
+logLevel: info
+
+rtspAddress: :8554
+hlsAddress: :8888
+webrtcAddress: :8889
+
+paths: {}

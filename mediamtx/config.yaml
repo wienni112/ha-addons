@@ -1,0 +1,26 @@
+name: "MediaMTX"
+slug: "mediamtx"
+description: "MediaMTX (RTSP/HLS/WebRTC) streaming server"
+version: "1.0.0"
+url: "https://github.com/wienni112/ha-addons"
+startup: application
+boot: auto
+init: false
+
+# host_network ist am einfachsten (kein Port-Mapping Stress, Multicast/UDP leichter)
+host_network: true
+
+arch:
+  - amd64
+  - aarch64
+  - armv7
+
+# Optional: wenn du später eine UI brauchst
+panel_icon: "mdi:video"
+
+# Config: wir mounten mediamtx.yml aus dem Add-on Ordner
+map:
+  - addon_config:rw
+
+options: {}
+schema: {}
