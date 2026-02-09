@@ -1,8 +1,9 @@
 name: MediaMTX
-version: "1.0.4"
+version: "1.0.5"
 hassio_api: true
 homeassistant_api: true
 slug: mediamtx
+init: false
 description: MediaMTX streaming server (RTSP / HLS / WebRTC)
 arch:
   - amd64
