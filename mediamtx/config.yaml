@@ -1,5 +1,5 @@
 name: MediaMTX
-version: "1.0.5"
+version: "1.0.6"
 hassio_api: true
 homeassistant_api: true
 slug: mediamtx
@@ -30,9 +30,11 @@ options:
       all_others: {}
 
 ports:
-  8554/tcp: 8554   # RTSP
-  8888/tcp: 8888   # HLS (HTTP)
-  8889/tcp: 8889   # WebRTC (HTTP signaling)
+  8554/tcp: 8554
+  8888/tcp: 8888
+  8889/tcp: 8889
+  8000/udp: 8000
+  8001/udp: 8001
 
 schema:
   mediamtx_config: str
