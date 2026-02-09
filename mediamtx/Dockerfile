@@ -22,9 +22,7 @@ RUN set -eux; \
   chmod +x /usr/bin/mediamtx; \
   rm -f /tmp/mediamtx.tar.gz
   
-COPY mediamtx.yml /etc/mediamtx.yml
-COPY run.sh /run.sh
+COPY run.sh /
 RUN chmod +x /run.sh
 
-EXPOSE 8554 8888 8889
 CMD ["/run.sh"]
