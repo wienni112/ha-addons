@@ -1,5 +1,5 @@
 name: MediaMTX
-version: "1.0.3"
+version: "1.0.4"
 hassio_api: true
 homeassistant_api: true
 slug: mediamtx
@@ -9,9 +9,8 @@ arch:
   - aarch64
 startup: services
 boot: auto
-host_network: true
 map:
-  - config:rw
+  - addon_config:rw
 
 options:
   mediamtx_config: |
@@ -28,6 +27,11 @@ options:
 
     paths:
       all_others: {}
+
+ports:
+  8554/tcp: 8554   # RTSP
+  8888/tcp: 8888   # HLS (HTTP)
+  8889/tcp: 8889   # WebRTC (HTTP signaling)
 
 schema:
   mediamtx_config: str
