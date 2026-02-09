@@ -1,0 +1,6 @@
+#!/command/with-contenv bashio
+set -euo pipefail
+
+CFG="/data/mediamtx.yml"
+bashio::log.info "Starting MediaMTX with ${CFG}"
+exec /usr/bin/mediamtx "${CFG}"

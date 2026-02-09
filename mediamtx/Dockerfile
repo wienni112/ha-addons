@@ -21,8 +21,12 @@ RUN set -eux; \
   tar -xzf /tmp/mediamtx.tar.gz -C /usr/bin mediamtx; \
   chmod +x /usr/bin/mediamtx; \
   rm -f /tmp/mediamtx.tar.gz
-  
-COPY run.sh /
-RUN chmod +x /run.sh
 
-CMD ["/run.sh"]
+# legacy init expects this file (prevents "cp: can't stat /etc/mediamtx.yml")
+COPY mediamtx.yml /etc/mediamtx.yml
+
+# s6/rootfs scripts (cont-init + service run)
+COPY rootfs /
+
+RUN chmod +x /etc/cont-init.d/10-config.sh \
+    && chmod +x /etc/services.d/mediamtx/run

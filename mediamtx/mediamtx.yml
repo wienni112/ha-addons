@@ -1,13 +1,3 @@
 logLevel: info
-
-rtsp:
-  enabled: yes
-  address: :8554
-
-hls:
-  enabled: yes
-
-webrtc:
-  enabled: yes
-
-paths: {}
+paths:
+  all_others: {}
