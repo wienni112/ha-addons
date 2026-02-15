@@ -1,7 +1,7 @@
 name: "OPC UA ↔ MQTT Bridge (Subscriptions)"
 slug: "opcua_mqtt_bridge"
 description: "High speed bidirectional OPC UA to MQTT bridge using UA Subscriptions"
-version: "0.1.1"
+version: "0.1.2"
 arch:
   - amd64
   - aarch64
