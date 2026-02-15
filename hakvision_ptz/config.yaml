@@ -1,5 +1,5 @@
 name: Hakvision PTZ Server
-version: "0.1.4"
+version: "0.1.5"
 slug: hakvision_ptz
 description: MQTT-to-Hikvision ISAPI PTZ control server
 url: https://github.com/wienni112/ha-addons
@@ -7,10 +7,6 @@ arch:
   - amd64
   - aarch64
   - armv7
-build_from:
-  amd64: ghcr.io/home-assistant/amd64-base-python:latest
-  aarch64: ghcr.io/home-assistant/aarch64-base-python:latest
-  armv7: ghcr.io/home-assistant/armv7-base-python:latest
 startup: services
 boot: auto
 init: false
