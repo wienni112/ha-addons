@@ -1,7 +1,7 @@
 name: "OPC UA ↔ MQTT Bridge (Subscriptions)"
 slug: "opcua_mqtt_bridge"
 description: "High speed bidirectional OPC UA to MQTT bridge using UA Subscriptions"
-version: "0.1.5"
+version: "0.1.6"
 arch:
   - amd64
   - aarch64
@@ -21,10 +21,11 @@ map:
 
 options:
   opcua:
-    application_uri: "urn:ha:opcua_mqtt_bridge:plc01"
+    
     url: "opc.tcp://172.22.20.11:4840"
-    security_policy: "Basic256"
+    security_policy: "Basic128Rsa15"
     security_mode: "SignAndEncrypt"
+    application_uri: "urn:ha:opcua_mqtt_bridge:plc01"
     username: ""
     password: ""
     publishing_interval_ms: 200
@@ -43,10 +44,10 @@ options:
 
 schema:
   opcua:
-    application_uri: str
     url: str
     security_policy: list(None|Basic256|Basic256Sha256)
     security_mode: list(None|Sign|SignAndEncrypt)
+    application_uri: str
     username: str?
     password: password?
     publishing_interval_ms: int(50,5000)
