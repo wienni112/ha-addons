@@ -7,7 +7,11 @@ from typing import Any, Dict, Optional, Tuple
 
 import yaml
 import paho.mqtt.client as mqtt
-from asyncua import Client, ua
+from asyncua.crypto.security_policies import (
+    SecurityPolicyNone,
+    SecurityPolicyBasic256,
+    SecurityPolicyBasic256Sha256,
+)
 
 OPTIONS_FILE = "/data/options.json"
 
@@ -87,11 +91,11 @@ def normalize_topic(prefix: str, suffix: str) -> str:
 def map_security_policy(policy: str):
     p = (policy or "None").strip()
     if p == "None":
-        return None
+        return SecurityPolicyNone
     if p == "Basic256":
-        return ua.SecurityPolicyBasic256
+        return SecurityPolicyBasic256
     if p == "Basic256Sha256":
-        return ua.SecurityPolicyBasic256Sha256
+        return SecurityPolicyBasic256Sha256
     raise ValueError(f"Unsupported security_policy: {policy}")
 
 
