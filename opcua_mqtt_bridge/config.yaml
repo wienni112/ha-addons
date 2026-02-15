@@ -45,7 +45,7 @@ options:
 schema:
   opcua:
     url: str
-    security_policy: list(None|Basic256|Basic256Sha256)
+    security_policy: list(None|Basic128Rsa15|Basic256|Basic256Sha256)
     security_mode: list(None|Sign|SignAndEncrypt)
     application_uri: str
     username: str?
