@@ -1,0 +1,9 @@
+read:
+  - path: "Analog/Temp_Eingang"
+    node: "ns=3;s=Analog.Temp_Eingang"
+    type: float
+
+rw:
+  - path: "Steuer/ANF/AUTO/JR"
+    node: "ns=3;s=Steuer.ANF_AUTO_JR"
+    type: bool
