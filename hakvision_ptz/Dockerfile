@@ -1,4 +1,5 @@
-FROM ghcr.io/hassio-addons/base-python:16.0.2
+ARG BUILD_FROM
+FROM ${BUILD_FROM}
 
 WORKDIR /app
 
