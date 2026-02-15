@@ -3,11 +3,15 @@ import json
 import time
 import logging
 import threading
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from app.mqtt_client import MqttConfig, MqttSubscriber
 from app.hikvision import HikvisionConfig, HikvisionISAPI
 
 log = logging.getLogger("hakvision_ptz")
+
+TZ_LOCAL = ZoneInfo("Europe/Berlin")
 
 
 def clamp(v: int, mn: int, mx: int) -> int:
@@ -35,6 +39,15 @@ def axis_to_100(value) -> int:
 def load_options() -> dict:
     with open("/data/options.json", "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+def ts_now():
+    dt_utc = datetime.now(timezone.utc)
+    dt_loc = dt_utc.astimezone(TZ_LOCAL)
+    return (
+        dt_utc.isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+        dt_loc.isoformat(timespec="milliseconds"),
+    )
 
 
 def main():
@@ -65,15 +78,37 @@ def main():
         channel=int(opt.get("channel", 1)),
     )
 
-    deadzone = int(opt.get("deadzone", 5))          # now in percent (0-100)
+    deadzone = int(opt.get("deadzone", 5))  # now in percent (0-100)
     default_speed = int(opt.get("default_speed", 5))
     max_speed = int(opt.get("max_speed", 10))
     smooth_stop_ms = int(opt.get("smooth_stop_ms", 300))
+    status_poll_ms = int(opt.get("status_poll_ms", 500))
 
     hik = HikvisionISAPI(hik_cfg)
     hik.test_connection()
 
     last_move_ts = 0.0
+
+    # Subscriber must exist before we can publish status from handle()
+    subscriber = None  # will be set below
+    status_topic = f"{mqtt_cfg.topic_prefix}/{mqtt_cfg.camera_id}/status/position"
+
+    def publish_position(source: str):
+        nonlocal subscriber
+        if subscriber is None:
+            return
+        st = hik.get_ptz_status()
+        ts_utc, ts_local = ts_now()
+        payload = {
+            "ts_utc": ts_utc,
+            "ts_local": ts_local,
+            "source": source,
+            "pan": st.get("pan"),
+            "tilt": st.get("tilt"),
+            "zoom": st.get("zoom"),
+        }
+        subscriber.publish(status_topic, json.dumps(payload), retain=True, qos=0)
+        log.info("STATUS published to %s (source=%s)", status_topic, source)
 
     def handle(topic: str, data: dict, ts: float):
         nonlocal last_move_ts
@@ -103,6 +138,7 @@ def main():
                 speed = clamp(speed, 1, max_speed)
 
                 # If small direction values were sent (-1..1)
+                # Example: pan=1 speed=7 -> 70
                 if abs(float(raw_pan)) <= 1.0 and pan != 0:
                     pan = clamp(int(round((pan / 100.0) * speed * 10)), -100, 100)
                 if abs(float(raw_tilt)) <= 1.0 and tilt != 0:
@@ -111,8 +147,13 @@ def main():
                     zoom = clamp(int(round((zoom / 100.0) * speed * 10)), -100, 100)
 
                 hik.continuous_move(pan, tilt, zoom)
-
                 log.info("MOVE pan=%s tilt=%s zoom=%s", pan, tilt, zoom)
+
+                # Immediately publish position after command (best-effort)
+                try:
+                    publish_position("after_cmd")
+                except Exception:
+                    log.exception("Failed to publish status after move")
 
                 duration_ms = int(data.get("duration_ms", 0))
 
@@ -122,6 +163,10 @@ def main():
                         try:
                             hik.stop()
                             log.info("MOVE stop after %sms", duration_ms)
+                            try:
+                                publish_position("after_cmd")
+                            except Exception:
+                                log.exception("Failed to publish status after stop")
                         except Exception:
                             log.exception("MOVE stop failed")
 
@@ -132,11 +177,19 @@ def main():
             elif action == "stop":
                 hik.stop()
                 log.info("STOP")
+                try:
+                    publish_position("after_cmd")
+                except Exception:
+                    log.exception("Failed to publish status after stop")
 
             elif action == "preset":
                 preset = int(data.get("preset"))
                 hik.goto_preset(preset)
                 log.info("PRESET goto %s", preset)
+                try:
+                    publish_position("after_cmd")
+                except Exception:
+                    log.exception("Failed to publish status after preset")
 
             else:
                 log.warning("Unknown action: %s payload=%s", topic, data)
@@ -152,13 +205,34 @@ def main():
                 try:
                     hik.stop()
                     log.info("Smooth-stop after %sms", smooth_stop_ms)
+                    try:
+                        publish_position("after_cmd")
+                    except Exception:
+                        log.exception("Failed to publish status after smooth-stop")
                 except Exception:
                     log.exception("Smooth-stop failed")
                 last_move_ts = 0.0
 
+    def status_poller():
+        # Wait until MQTT is connected, then publish regularly
+        if subscriber and not subscriber.connected.wait(timeout=30):
+            log.warning("MQTT not connected after 30s, status poller will still try.")
+        while True:
+            try:
+                publish_position("poll")
+            except Exception:
+                log.exception("Status poll failed")
+            time.sleep(max(50, status_poll_ms) / 1000.0)
+
     threading.Thread(target=watchdog, daemon=True).start()
 
-    MqttSubscriber(mqtt_cfg, handle).loop_forever()
+    subscriber = MqttSubscriber(mqtt_cfg, handle)
+
+    # Start status polling thread (after subscriber is created)
+    threading.Thread(target=status_poller, daemon=True).start()
+
+    # Enter MQTT loop
+    subscriber.loop_forever()
 
 
 if __name__ == "__main__":
