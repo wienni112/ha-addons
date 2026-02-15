@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import yaml
 import paho.mqtt.client as mqtt
+from asyncua import Client, ua
 from asyncua.crypto.security_policies import (
     SecurityPolicyNone,
     SecurityPolicyBasic256,
