@@ -1,5 +1,5 @@
 name: Hakvision PTZ Server
-version: "0.1.3"
+version: "0.1.4"
 slug: hakvision_ptz
 description: MQTT-to-Hikvision ISAPI PTZ control server
 url: https://github.com/wienni112/ha-addons
