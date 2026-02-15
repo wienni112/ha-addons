@@ -1,0 +1,53 @@
+name: Hakvision PTZ Server
+version: "0.1.0"
+slug: hakvision_ptz
+description: MQTT-to-Hikvision ISAPI PTZ control server
+url: https://github.com/wienni112/ha-addons
+arch:
+  - amd64
+  - aarch64
+  - armv7
+startup: services
+boot: auto
+init: false
+hassio_api: true
+homeassistant_api: false
+
+map:
+  - addon_config:rw
+
+options:
+  mqtt_host: core-mosquitto
+  mqtt_port: 1883
+  mqtt_username: ""
+  mqtt_password: ""
+  mqtt_topic_prefix: "ptz"
+  camera_id: "camera1"
+  hikvision_host: "192.168.1.50"
+  hikvision_port: 80
+  hikvision_username: "admin"
+  hikvision_password: "please-change-me"
+  channel: 1
+  deadzone: 1
+  max_speed: 7
+  default_speed: 4
+  smooth_stop_ms: 250
+  log_level: "INFO"
+
+schema:
+  mqtt_host: str
+  mqtt_port: int
+  mqtt_username: str
+  mqtt_password: password
+  mqtt_topic_prefix: str
+  camera_id: str
+  hikvision_host: str
+  hikvision_port: int
+  hikvision_username: str
+  hikvision_password: password
+  channel: int
+  deadzone: int
+  max_speed: int
+  default_speed: int
+  smooth_stop_ms: int
+  log_level: list(DEBUG|INFO|WARNING|ERROR)
