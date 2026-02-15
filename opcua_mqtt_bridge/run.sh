@@ -1,9 +1,6 @@
 #!/usr/bin/with-contenv bash
 set -euo pipefail
 
-# -----------------------------
-# Paths
-# -----------------------------
 CFG_DIR="/config/opcua_mqtt_bridge"
 TAGS_FILE="${TAGS_FILE:-/config/opcua_mqtt_bridge/tags.yaml}"
 EXAMPLE_FILE="/app/tags.example.yaml"
@@ -15,9 +12,6 @@ CLIENT_KEY_PEM="${PKI_DIR}/client_key.pem"
 echo "[opcua_mqtt_bridge] Preparing config dir..."
 mkdir -p "$CFG_DIR"
 
-# -----------------------------
-# Ensure tags.yaml exists
-# -----------------------------
 if [[ ! -f "$TAGS_FILE" ]]; then
   echo "[opcua_mqtt_bridge] tags.yaml not found at: $TAGS_FILE"
   echo "[opcua_mqtt_bridge] Creating example tags.yaml..."
@@ -32,15 +26,11 @@ YAML
   echo "[opcua_mqtt_bridge] Please edit: $TAGS_FILE"
 fi
 
-# -----------------------------
-# Ensure PKI exists (Client cert for Sign&Encrypt)
-# -----------------------------
 echo "[opcua_mqtt_bridge] Preparing PKI..."
 mkdir -p "$PKI_DIR"
 
 if [[ ! -f "$CLIENT_CERT_DER" || ! -f "$CLIENT_KEY_PEM" ]]; then
   echo "[opcua_mqtt_bridge] Generating OPC UA client certificate..."
-  # Requires openssl in image (apk add openssl)
   openssl req -x509 -newkey rsa:2048 \
     -keyout "$CLIENT_KEY_PEM" \
     -out "$CLIENT_CERT_DER" \
