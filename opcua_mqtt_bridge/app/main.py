@@ -10,6 +10,7 @@ import paho.mqtt.client as mqtt
 from asyncua import Client, ua
 from asyncua.crypto.security_policies import (
     SecurityPolicyNone,
+    SecurityPolicyBasic128Rsa15,
     SecurityPolicyBasic256,
     SecurityPolicyBasic256Sha256,
 )
@@ -93,6 +94,8 @@ def map_security_policy(policy: str):
     p = (policy or "None").strip()
     if p == "None":
         return SecurityPolicyNone
+    if p == "Basic128Rsa15":
+        return SecurityPolicyBasic128Rsa15
     if p == "Basic256":
         return SecurityPolicyBasic256
     if p == "Basic256Sha256":
@@ -202,6 +205,13 @@ async def run_bridge_forever():
             server_cert_path = os.path.join(trusted_server_dir, "server_cert.der")
 
             client = Client(url)
+            app_uri = opc_cfg.get("application_uri") or "urn:ha:opcua_mqtt_bridge:plc01"
+
+            # je nach asyncua-Version:
+            if hasattr(client, "set_application_uri"):
+                client.set_application_uri(app_uri)
+            else:
+                client.application_uri = app_uri
 
             # Username/Password
             if username:
