@@ -1,10 +1,10 @@
-FROM ghcr.io/home-assistant/amd64-base:latest
-
-RUN apk add --no-cache python3 py3-pip
+ARG BUILD_FROM=ghcr.io/hassio-addons/base-python:16.0.2
+FROM ${BUILD_FROM}
 
 WORKDIR /app
+
 COPY requirements.txt /app/
-RUN pip install --no-cache-dir -r /app/requirements.txt
+RUN pip install --no-cache-dir --break-system-packages -r /app/requirements.txt
 
 COPY app/ /app/app/
 COPY run.sh /app/run.sh
