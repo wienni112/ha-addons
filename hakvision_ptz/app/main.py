@@ -39,6 +39,7 @@ def main():
     smooth_stop_ms = int(opt.get("smooth_stop_ms", 250))
 
     hik = HikvisionISAPI(hik_cfg)
+    hik.test_connection()
     last_move_ts = 0.0
 
     def handle(topic: str, data: dict, ts: float):
