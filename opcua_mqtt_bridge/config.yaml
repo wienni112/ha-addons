@@ -22,10 +22,12 @@ map:
 options:
   opcua:
     url: "opc.tcp://172.22.20.11:4840"
-    security: "None"
+    security_policy: "Basic256"
+    security_mode: "SignAndEncrypt"
     username: ""
     password: ""
     publishing_interval_ms: 200
+    auto_trust_server: true
   mqtt:
     host: "core-mosquitto"
     port: 1883
@@ -41,10 +43,12 @@ options:
 schema:
   opcua:
     url: str
-    security: list(None|Sign|SignAndEncrypt)
+    security_policy: list(None|Basic256|Basic256Sha256)
+    security_mode: list(None|Sign|SignAndEncrypt)
     username: str?
     password: password?
     publishing_interval_ms: int(50,5000)
+    auto_trust_server: bool
   mqtt:
     host: str
     port: int
@@ -56,4 +60,3 @@ schema:
     retain_states: bool
   bridge:
     tags_file: str
-
