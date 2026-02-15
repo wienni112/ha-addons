@@ -1,1 +1,59 @@
+name: "OPC UA ↔ MQTT Bridge (Subscriptions)"
+slug: "opcua_mqtt_bridge"
+description: "High speed bidirectional OPC UA to MQTT bridge using UA Subscriptions"
+version: "0.1.0"
+arch:
+  - amd64
+  - aarch64
+  - armv7
+  - armhf
+
+startup: services
+boot: auto
+init: false
+
+services:
+  - mqtt:need
+
+map:
+  - config:rw
+  - ssl:ro
+
+options:
+  opcua:
+    url: "opc.tcp://172.22.20.11:4840"
+    security: "None"
+    username: ""
+    password: ""
+    publishing_interval_ms: 200
+  mqtt:
+    host: "core-mosquitto"
+    port: 1883
+    username: ""
+    password: ""
+    topic_prefix: "opcua/plc01"
+    qos_state: 0
+    qos_cmd: 1
+    retain_states: true
+  bridge:
+    tags_file: "/config/opcua_mqtt_bridge/tags.yaml"
+
+schema:
+  opcua:
+    url: str
+    security: list(None|Sign|SignAndEncrypt)
+    username: str?
+    password: password?
+    publishing_interval_ms: int(50,5000)
+  mqtt:
+    host: str
+    port: int
+    username: str?
+    password: password?
+    topic_prefix: str
+    qos_state: int(0,2)
+    qos_cmd: int(0,2)
+    retain_states: bool
+  bridge:
+    tags_file: str
 
