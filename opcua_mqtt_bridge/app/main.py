@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import time
+import socket
 from typing import Any, Dict, Optional, Tuple
 
 import yaml
@@ -205,7 +206,19 @@ async def run_bridge_forever():
             server_cert_path = os.path.join(trusted_server_dir, "server_cert.der")
 
             client = Client(url)
-            app_uri = opc_cfg.get("application_uri") or "urn:ha:opcua_mqtt_bridge:plc01"
+            # Application URI:
+            # - bevorzugt aus config (options.json) wenn gesetzt
+            # - sonst Default: urn:${HOSTNAME}:ha:OPCUA2MQTT (wie in run.sh)
+            host_actual = (
+                os.getenv("HOSTNAME")
+                or socket.gethostname()
+                or "ha-addon"
+            ).strip()
+
+            default_app_uri = f"urn:{host_actual}:ha:OPCUA2MQTT"
+            app_uri = (opc_cfg.get("application_uri") or default_app_uri).strip()
+
+            log.info("Using OPC UA ApplicationUri: %s", app_uri)
 
             # je nach asyncua-Version:
             if hasattr(client, "set_application_uri"):
