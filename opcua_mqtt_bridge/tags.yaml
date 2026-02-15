@@ -1,0 +1,4 @@
+read:
+  - path: "Server/CurrentTime"
+    node: "ns=0;i=2258"
+    type: datetime
