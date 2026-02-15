@@ -59,6 +59,9 @@ def main():
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
+    # HTTP Spam reduzieren
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
     log.info("Starting Hakvision PTZ Server...")
 
     mqtt_cfg = MqttConfig(
@@ -108,7 +111,7 @@ def main():
             "zoom": st.get("zoom"),
         }
         subscriber.publish(status_topic, json.dumps(payload), retain=True, qos=0)
-        log.info("STATUS published to %s (source=%s)", status_topic, source)
+        log.debug("STATUS published to %s (source=%s)", status_topic, source)
 
     def handle(topic: str, data: dict, ts: float):
         nonlocal last_move_ts
