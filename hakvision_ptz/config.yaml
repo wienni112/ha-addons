@@ -8,9 +8,9 @@ arch:
   - aarch64
   - armv7
 build_from:
-  amd64: ghcr.io/hassio-addons/base-python:16.0.2
-  aarch64: ghcr.io/hassio-addons/base-python:16.0.2
-  armv7: ghcr.io/hassio-addons/base-python:16.0.2
+  amd64: ghcr.io/home-assistant/amd64-base-python:latest
+  aarch64: ghcr.io/home-assistant/aarch64-base-python:latest
+  armv7: ghcr.io/home-assistant/armv7-base-python:latest
 startup: services
 boot: auto
 init: false
