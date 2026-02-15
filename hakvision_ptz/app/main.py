@@ -1,10 +1,4 @@
-import os
-import time
-import logging
-import threading
-
-import bashio  # HA Add-on helper
-
+import os, json, time, logging, threading
 from app.mqtt_client import MqttConfig, MqttSubscriber
 from app.hikvision import HikvisionConfig, HikvisionISAPI
 
@@ -13,31 +7,36 @@ log = logging.getLogger("hakvision_ptz")
 def clamp(v: int, mn: int, mx: int) -> int:
     return mn if v < mn else mx if v > mx else v
 
+def load_options() -> dict:
+    with open("/data/options.json", "r", encoding="utf-8") as f:
+        return json.load(f)
+
 def main():
-    logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+    opt = load_options()
+    logging.basicConfig(level=opt.get("log_level", "INFO"))
     log.info("Starting Hakvision PTZ Server...")
 
     mqtt_cfg = MqttConfig(
-        host=bashio.config("mqtt_host"),
-        port=int(bashio.config("mqtt_port")),
-        username=bashio.config("mqtt_username"),
-        password=bashio.config("mqtt_password"),
-        topic_prefix=bashio.config("mqtt_topic_prefix"),
-        camera_id=bashio.config("camera_id"),
+        host=opt.get("mqtt_host", "core-mosquitto"),
+        port=int(opt.get("mqtt_port", 1883)),
+        username=opt.get("mqtt_username", ""),
+        password=opt.get("mqtt_password", ""),
+        topic_prefix=opt.get("mqtt_topic_prefix", "ptz"),
+        camera_id=opt.get("camera_id", "camera1"),
     )
 
     hik_cfg = HikvisionConfig(
-        host=bashio.config("hikvision_host"),
-        port=int(bashio.config("hikvision_port")),
-        username=bashio.config("hikvision_username"),
-        password=bashio.config("hikvision_password"),
-        channel=int(bashio.config("channel")),
+        host=opt["hikvision_host"],
+        port=int(opt.get("hikvision_port", 80)),
+        username=opt["hikvision_username"],
+        password=opt["hikvision_password"],
+        channel=int(opt.get("channel", 1)),
     )
 
-    deadzone = int(bashio.config("deadzone"))
-    max_speed = int(bashio.config("max_speed"))
-    default_speed = int(bashio.config("default_speed"))
-    smooth_stop_ms = int(bashio.config("smooth_stop_ms"))
+    deadzone = int(opt.get("deadzone", 1))
+    max_speed = int(opt.get("max_speed", 7))
+    default_speed = int(opt.get("default_speed", 4))
+    smooth_stop_ms = int(opt.get("smooth_stop_ms", 250))
 
     hik = HikvisionISAPI(hik_cfg)
     last_move_ts = 0.0
@@ -45,7 +44,6 @@ def main():
     def handle(topic: str, data: dict, ts: float):
         nonlocal last_move_ts
         action = topic.split("/")[-1]
-
         try:
             if action == "move":
                 pan = int(data.get("pan", 0))
@@ -77,9 +75,8 @@ def main():
 
             else:
                 log.warning("Unknown action: %s payload=%s", topic, data)
-
-        except Exception as e:
-            log.exception("Error handling topic=%s payload=%s: %s", topic, data, e)
+        except Exception:
+            log.exception("Error handling topic=%s payload=%s", topic, data)
 
     def watchdog():
         nonlocal last_move_ts
