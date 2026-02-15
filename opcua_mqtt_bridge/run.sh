@@ -6,8 +6,12 @@ TAGS_FILE="${TAGS_FILE:-/config/opcua_mqtt_bridge/tags.yaml}"
 EXAMPLE_FILE="/app/tags.example.yaml"
 
 PKI_DIR="/data/pki"
-CLIENT_CERT_DER="${PKI_DIR}/client_cert.der"
-CLIENT_KEY_PEM="${PKI_DIR}/client_key.pem"
+CERT_PEM="${PKI_DIR}/client_cert.pem"
+KEY_PEM="${PKI_DIR}/client_key.pem"
+CERT_DER="${PKI_DIR}/client_cert.der"
+
+# Optional: allow setting via env; otherwise use default
+APP_URI="${OPCUA_APPLICATION_URI:-urn:ha:opcua_mqtt_bridge:plc01}"
 
 echo "[opcua_mqtt_bridge] Preparing config dir..."
 mkdir -p "$CFG_DIR"
@@ -29,15 +33,17 @@ fi
 echo "[opcua_mqtt_bridge] Preparing PKI..."
 mkdir -p "$PKI_DIR"
 
-if [[ ! -f "$CLIENT_CERT_DER" || ! -f "$CLIENT_KEY_PEM" ]]; then
-  echo "[opcua_mqtt_bridge] Generating OPC UA client certificate..."
-  openssl req -x509 -newkey rsa:2048 \
-    -keyout "$CLIENT_KEY_PEM" \
-    -out "$CLIENT_CERT_DER" \
-    -outform DER \
+if [[ ! -f "$CERT_PEM" || ! -f "$KEY_PEM" ]]; then
+  echo "[opcua_mqtt_bridge] Generating OPC UA client certificate with SAN URI: $APP_URI"
+
+  openssl req -x509 -newkey rsa:2048 -nodes \
+    -keyout "$KEY_PEM" \
+    -out "$CERT_PEM" \
     -days 3650 \
-    -nodes \
-    -subj "/CN=ha-opcua-mqtt-bridge"
+    -subj "/CN=opcua-mqtt-bridge" \
+    -addext "subjectAltName=URI:$APP_URI"
+
+  openssl x509 -in "$CERT_PEM" -outform der -out "$CERT_DER"
 fi
 
 echo "[opcua_mqtt_bridge] Starting bridge..."
