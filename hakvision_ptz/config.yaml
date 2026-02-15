@@ -3,6 +3,7 @@ version: "0.2.4"
 slug: hakvision_ptz
 description: MQTT-to-Hikvision ISAPI PTZ control server
 url: https://github.com/wienni112/ha-addons
+
 arch:
   - amd64
   - aarch64
@@ -15,9 +16,8 @@ init: false
 hassio_api: true
 homeassistant_api: false
 
-# ensure MQTT is available when using core-mosquitto
 services:
-  mqtt: need
+  - "mqtt:need"
 
 map:
   - addon_config:rw
@@ -36,18 +36,15 @@ options:
   hikvision_password: "please-change-me"
   channel: 1
 
-  # now interpreted as percent (0..100) because axes are -100..100
+  # Achsen -100..100 => Deadzone in Prozent
   deadzone: 5
 
-  # optional speed multiplier for button-style commands (1..10)
   max_speed: 10
   default_speed: 5
-
-  # smooth stop for joystick impulses without duration_ms
   smooth_stop_ms: 300
 
-  # PTZ position status polling interval in seconds
-  status_poll_s: 0.5
+  # Poll-Intervall in MILLISEKUNDEN (kein float nötig)
+  status_poll_ms: 500
 
   log_level: "INFO"
 
@@ -70,6 +67,6 @@ schema:
   default_speed: int
   smooth_stop_ms: int
 
-  status_poll_s: float
+  status_poll_ms: int
 
   log_level: list(DEBUG|INFO|WARNING|ERROR)
