@@ -2,7 +2,6 @@ import asyncio
 import json
 import logging
 import os
-import time
 import socket
 from typing import Any, Dict, Optional, Tuple
 
@@ -17,7 +16,6 @@ from asyncua.crypto.security_policies import (
 )
 
 OPTIONS_FILE = "/data/options.json"
-
 
 # -----------------------------
 # Helpers: load config/tags
@@ -42,9 +40,9 @@ def load_tags(path: str) -> Dict[str, Any]:
 # Type parsing for writes
 # -----------------------------
 def parse_payload(payload: str, tag_type: str) -> Any:
-    v = payload.strip()
-
+    v = (payload or "").strip()
     t = (tag_type or "").strip().lower()
+
     if t in ("bool", "boolean"):
         if v.lower() in ("true", "1", "on", "yes"):
             return True
@@ -68,8 +66,7 @@ def parse_payload(payload: str, tag_type: str) -> Any:
         return v
 
     if t in ("datetime", "date", "time"):
-        # Most setups won't write datetime; keep as string.
-        # If you need actual UA DateTime writing we can extend this.
+        # keep as string unless you need UA DateTime conversion
         return v
 
     # Fallback: try bool -> float -> string
@@ -82,10 +79,9 @@ def parse_payload(payload: str, tag_type: str) -> Any:
 
 
 def normalize_topic(prefix: str, suffix: str) -> str:
-    # Avoid accidental double slashes
-    prefix = prefix.rstrip("/")
-    suffix = suffix.lstrip("/")
-    return f"{prefix}/{suffix}"
+    prefix = (prefix or "").rstrip("/")
+    suffix = (suffix or "").lstrip("/")
+    return f"{prefix}/{suffix}" if prefix else suffix
 
 
 # -----------------------------
@@ -115,28 +111,43 @@ def map_security_mode(mode: str):
     raise ValueError(f"Unsupported security_mode: {mode}")
 
 
+def is_security_enabled(policy: str, mode: str) -> bool:
+    return (policy or "None").strip() != "None" and (mode or "None").strip() != "None"
+
+
 # -----------------------------
 # Subscription Handler
 # -----------------------------
 class SubHandler:
-    def __init__(self, mqtt_client: mqtt.Client, topic_prefix: str, qos_state: int, retain_states: bool, log: logging.Logger):
+    def __init__(
+        self,
+        mqtt_client: mqtt.Client,
+        topic_prefix: str,
+        qos_state: int,
+        retain_states: bool,
+        log: logging.Logger,
+    ):
         self.mqtt = mqtt_client
-        self.prefix = topic_prefix.rstrip("/")
+        self.prefix = (topic_prefix or "").rstrip("/")
         self.qos = int(qos_state)
         self.retain = bool(retain_states)
         self.log = log
         # Map nodeid string -> path
         self.nodeid_to_path: Dict[str, str] = {}
 
-    def datachange_notification(self, node, val, data):
+    def datachange_notification(self, node, val, _data):
         try:
             nodeid_str = node.nodeid.to_string()
             path = self.nodeid_to_path.get(nodeid_str)
             if not path:
                 return
             topic = normalize_topic(self.prefix, f"state/{path}")
-            # paho-mqtt can publish non-string; it will convert for us in most cases.
-            self.mqtt.publish(topic, val, qos=self.qos, retain=self.retain)
+            # publish payload as JSON when possible (keeps HA happy for dict/list), else raw
+            try:
+                payload = json.dumps(val) if isinstance(val, (dict, list)) else val
+            except Exception:
+                payload = str(val)
+            self.mqtt.publish(topic, payload, qos=self.qos, retain=self.retain)
         except Exception as e:
             self.log.warning("DataChange publish failed: %s", e)
 
@@ -148,7 +159,7 @@ async def run_bridge_forever():
     opts = load_options()
 
     # Logging
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     log = logging.getLogger("opcua_mqtt_bridge")
 
     # Load tags
@@ -157,19 +168,38 @@ async def run_bridge_forever():
 
     # MQTT
     mqtt_cfg = opts["mqtt"]
-    prefix = mqtt_cfg["topic_prefix"].rstrip("/")
+    prefix = (mqtt_cfg.get("topic_prefix") or "").rstrip("/")
     qos_state = int(mqtt_cfg.get("qos_state", 0))
     qos_cmd = int(mqtt_cfg.get("qos_cmd", 1))
     retain_states = bool(mqtt_cfg.get("retain_states", True))
 
+    availability_topic = normalize_topic(prefix, "meta/availability")
+
     mqtt_client = mqtt.Client(client_id=mqtt_cfg.get("client_id") or "")
+    mqtt_client.enable_logger(log)
+
     if mqtt_cfg.get("username"):
         mqtt_client.username_pw_set(mqtt_cfg["username"], mqtt_cfg.get("password") or "")
+
+    # Will message (if addon/container dies, broker sets offline)
+    mqtt_client.will_set(availability_topic, "offline", qos=1, retain=True)
+
     mqtt_client.connect(mqtt_cfg["host"], int(mqtt_cfg["port"]), keepalive=60)
     mqtt_client.loop_start()
 
-    availability_topic = normalize_topic(prefix, "meta/availability")
-    mqtt_client.publish(availability_topic, "offline", retain=True)
+    # Set online/offline explicitly on connect/disconnect too
+    def on_connect(_c, _u, _f, rc, *_args):
+        if rc == 0:
+            mqtt_client.publish(availability_topic, "online", qos=1, retain=True)
+        else:
+            log.error("MQTT connect failed rc=%s", rc)
+
+    def on_disconnect(_c, _u, rc, *_args):
+        # if rc != 0 it was unexpected; will message will also handle broker-side
+        log.warning("MQTT disconnected rc=%s", rc)
+
+    mqtt_client.on_connect = on_connect
+    mqtt_client.on_disconnect = on_disconnect
 
     # Async loop ref (needed for thread-safe scheduling from paho callbacks)
     loop = asyncio.get_running_loop()
@@ -196,8 +226,7 @@ async def run_bridge_forever():
             publishing_interval_ms = int(opc_cfg.get("publishing_interval_ms", 200))
             auto_trust_server = bool(opc_cfg.get("auto_trust_server", True))
 
-            # Cert paths (client cert/key are created by run.sh under /data/pki)
-            # You can change these later if you want
+            # PKI paths (created by run.sh under /data/pki in your addon)
             pki_dir = "/data/pki"
             client_cert = os.path.join(pki_dir, "client_cert.der")
             client_key = os.path.join(pki_dir, "client_key.pem")
@@ -206,21 +235,13 @@ async def run_bridge_forever():
             server_cert_path = os.path.join(trusted_server_dir, "server_cert.der")
 
             client = Client(url)
-            # Application URI:
-            # - bevorzugt aus config (options.json) wenn gesetzt
-            # - sonst Default: urn:${HOSTNAME}:ha:OPCUA2MQTT (wie in run.sh)
-            host_actual = (
-                os.getenv("HOSTNAME")
-                or socket.gethostname()
-                or "ha-addon"
-            ).strip()
 
+            # Application URI (fix: default_app_uri bug + consistent hostname usage)
+            host_actual = (os.getenv("HOSTNAME") or socket.gethostname() or "ha-addon").strip()
             default_app_uri = f"urn:{host_actual}:ha:OPCUA2MQTT"
-            app_uri = (opc_cfg.get("application_uri") or default_app_uri).strip()
-
+            app_uri = (opc_cfg.get("application_uri") or os.getenv("APP_URI") or default_app_uri).strip()
             log.info("Using OPC UA ApplicationUri: %s", app_uri)
 
-            # je nach asyncua-Version:
             if hasattr(client, "set_application_uri"):
                 client.set_application_uri(app_uri)
             else:
@@ -235,12 +256,20 @@ async def run_bridge_forever():
             pol = map_security_policy(security_policy)
             mode = map_security_mode(security_mode)
 
-            if pol is None or mode == ua.MessageSecurityMode.None_:
+            if not is_security_enabled(security_policy, security_mode):
                 log.warning("OPC UA security disabled (policy/mode None).")
             else:
+                # Ensure client cert/key exist
+                if not os.path.exists(client_cert) or not os.path.exists(client_key):
+                    raise FileNotFoundError(
+                        f"Client certificate/key missing. Expected:\n"
+                        f"- {client_cert}\n- {client_key}\n"
+                        f"Create them in your addon (e.g. run.sh) before enabling security."
+                    )
+
                 # Strict vs Auto trust:
-                # - Strict: require server_cert_path to exist
-                # - Auto trust: do NOT pin server cert (trust implicitly)
+                # - Strict: require pinned server_cert.der
+                # - Auto trust: do NOT pin server cert
                 if (not auto_trust_server) and (not os.path.exists(server_cert_path)):
                     raise FileNotFoundError(
                         f"Strict trust enabled but server cert missing: {server_cert_path}. "
@@ -256,7 +285,8 @@ async def run_bridge_forever():
                         pol,
                         certificate=client_cert,
                         private_key=client_key,
-                        # server_certificate omitted intentionally
+                        # server_certificate intentionally omitted
+                        mode=mode,
                     )
                 else:
                     log.info("Strict server cert pinning enabled: %s", server_cert_path)
@@ -265,19 +295,19 @@ async def run_bridge_forever():
                         certificate=client_cert,
                         private_key=client_key,
                         server_certificate=server_cert_path,
+                        mode=mode,
                     )
 
-            # Connect
+            # Connect OPC UA
             await client.connect()
             log.info("Connected to OPC UA: %s", url)
-            mqtt_client.publish(availability_topic, "online", retain=True)
+            mqtt_client.publish(availability_topic, "online", qos=1, retain=True)
 
             # Build subscription
             handler = SubHandler(mqtt_client, prefix, qos_state, retain_states, log)
             subscription = await client.create_subscription(publishing_interval_ms, handler)
 
             # Subscribe nodes
-            # Read nodes
             for tag in tags.get("read", []):
                 path = tag["path"]
                 nodeid = tag["node"]
@@ -305,7 +335,7 @@ async def run_bridge_forever():
                 try:
                     if not msg.topic.startswith(cmd_prefix):
                         return
-                    path = msg.topic[len(cmd_prefix):]
+                    path = msg.topic[len(cmd_prefix) :]
                     if path not in write_nodes:
                         return
 
@@ -316,8 +346,6 @@ async def run_bridge_forever():
                         try:
                             value = parse_payload(payload, t)
                             await node.write_value(value)
-                            # optional ack/meta
-                            # mqtt_client.publish(normalize_topic(prefix, f"meta/last_write/{path}"), time.time(), retain=False)
                         except Exception as e:
                             log.error("Write error %s: %s", path, e)
 
@@ -337,7 +365,7 @@ async def run_bridge_forever():
 
         except Exception as e:
             log.error("Bridge error: %s", e)
-            mqtt_client.publish(availability_topic, "offline", retain=True)
+            mqtt_client.publish(availability_topic, "offline", qos=1, retain=True)
 
             # Clean up OPC UA client if partially connected
             try:
