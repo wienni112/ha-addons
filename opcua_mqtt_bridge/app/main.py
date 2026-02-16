@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import socket
+import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, List
 
@@ -305,8 +306,30 @@ class SubHandler:
             path = self.nodeid_to_path.get(nodeid_str)
             if not path:
                 return
+
             topic = normalize_topic(self.prefix, f"state/{path}")
-            self.mqtt.publish(topic, val, qos=self.qos, retain=self.retain)
+
+            payload = val
+
+            # --- MQTT payload normalization ---
+            if isinstance(val, bool):
+                payload = "true" if val else "false"
+
+            elif isinstance(val, (datetime.datetime, datetime.date, datetime.time)):
+                payload = val.isoformat()
+
+            elif isinstance(val, (list, dict)):
+                payload = json.dumps(val, ensure_ascii=False, default=str)
+
+            elif val is None:
+                payload = None
+
+            elif not isinstance(val, (str, bytes, bytearray, int, float)):
+                # Fallback for any other complex type
+                payload = str(val)
+
+            self.mqtt.publish(topic, payload, qos=self.qos, retain=self.retain)
+
         except Exception as e:
             self.log.warning("DataChange publish failed: %s", e)
 
