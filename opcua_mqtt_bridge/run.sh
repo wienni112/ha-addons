@@ -4,23 +4,34 @@ set -euo pipefail
 CFG_DIR="/config/opcua_mqtt_bridge"
 TAGS_FILE="${TAGS_FILE:-/config/opcua_mqtt_bridge/tags.yaml}"
 EXAMPLE_FILE="/app/tags.example.yaml"
-
 PKI_DIR="/data/pki"
 
 ADDON_HOSTNAME="$(hostname 2>/dev/null || cat /etc/hostname)"
 ADDON_IP="$(hostname -i 2>/dev/null | awk '{print $1}' || true)"
 
-# application_uri_suffix aus options.json
-URI_SUFFIX="$(python3 - <<'PY'
-import json
+# Read options.json once (no bashio)
+read_json() {
+  python3 - <<'PY' "$1" "$2"
+import json, sys
+path = sys.argv[1]
+default = sys.argv[2]
 try:
     with open("/data/options.json","r",encoding="utf-8") as f:
         opts=json.load(f)
-    print((opts.get("opcua",{}) or {}).get("application_uri_suffix","OPCUA2MQTT") or "OPCUA2MQTT")
+    cur=opts
+    for key in path.split("."):
+        cur = (cur or {}).get(key)
+    print(cur if (cur is not None and cur != "") else default)
 except Exception:
-    print("OPCUA2MQTT")
+    print(default)
 PY
-)"
+}
+
+URI_SUFFIX="$(read_json 'opcua.application_uri_suffix' 'OPCUA2MQTT')"
+CERT_O="$(read_json 'pki.cert_o' 'HA')"
+CERT_C="$(read_json 'pki.cert_c' 'DE')"
+CERT_ST="$(read_json 'pki.cert_st' '')"
+CERT_L="$(read_json 'pki.cert_l' '')"
 
 echo "[opcua_mqtt_bridge] application_uri_suffix: ${URI_SUFFIX}"
 
@@ -52,45 +63,8 @@ fi
 echo "[opcua_mqtt_bridge] Preparing PKI..."
 mkdir -p "$PKI_DIR"
 
-# PKI Felder aus options.json (pki: cert_o/cert_c/cert_st/cert_l)
-CERT_O="$(python3 - <<'PY'
-import json
-try:
-  o=json.load(open("/data/options.json","r",encoding="utf-8"))
-  print(((o.get("pki") or {}).get("cert_o")) or "HA")
-except: print("HA")
-PY
-)"
-CERT_C="$(python3 - <<'PY'
-import json
-try:
-  o=json.load(open("/data/options.json","r",encoding="utf-8"))
-  print(((o.get("pki") or {}).get("cert_c")) or "DE")
-except: print("DE")
-PY
-)"
-CERT_ST="$(python3 - <<'PY'
-import json
-try:
-  o=json.load(open("/data/options.json","r",encoding="utf-8"))
-  print(((o.get("pki") or {}).get("cert_st")) or "")
-except: print("")
-PY
-)"
-CERT_L="$(python3 - <<'PY'
-import json
-try:
-  o=json.load(open("/data/options.json","r",encoding="utf-8"))
-  print(((o.get("pki") or {}).get("cert_l")) or "")
-except: print("")
-PY
-)"
-
 OPENSSL_CNF="$(mktemp)"
-
-# OpenSSL Config schreiben – ST/L nur wenn nicht leer!
-{
-  cat <<EOF
+cat > "$OPENSSL_CNF" <<EOF
 [ req ]
 distinguished_name = dn
 x509_extensions = v3_req
@@ -100,16 +74,13 @@ prompt = no
 CN = ${ADDON_HOSTNAME}
 O  = ${CERT_O}
 C  = ${CERT_C}
-EOF
-
-  [[ -n "${CERT_ST}" ]] && echo "ST = ${CERT_ST}"
-  [[ -n "${CERT_L}"  ]] && echo "L  = ${CERT_L}"
-
-  cat <<EOF
+ST = ${CERT_ST}
+L  = ${CERT_L}
 
 [ v3_req ]
 basicConstraints = CA:FALSE
-keyUsage = digitalSignature, keyEncipherment, dataEncipherment
+# UA server mögen das oft so:
+keyUsage = digitalSignature, nonRepudiation, keyEncipherment, keyAgreement
 extendedKeyUsage = clientAuth
 subjectAltName = @alt_names
 
@@ -118,8 +89,9 @@ DNS.1 = ${ADDON_HOSTNAME}
 URI.1 = ${APP_URI}
 EOF
 
-  [[ -n "${ADDON_IP}" ]] && echo "IP.1 = ${ADDON_IP}"
-} > "$OPENSSL_CNF"
+if [[ -n "${ADDON_IP}" ]]; then
+  echo "IP.1 = ${ADDON_IP}" >> "$OPENSSL_CNF"
+fi
 
 if [[ ! -f "$CLIENT_CERT_PEM" || ! -f "$CLIENT_KEY_PEM" ]]; then
   echo "[opcua_mqtt_bridge] Generating OPC UA client certificate"
@@ -131,7 +103,8 @@ if [[ ! -f "$CLIENT_CERT_PEM" || ! -f "$CLIENT_KEY_PEM" ]]; then
     -keyout "$CLIENT_KEY_PEM" \
     -out "$CLIENT_CERT_PEM" \
     -days 3650 \
-    -config "$OPENSSL_CNF"
+    -config "$OPENSSL_CNF" \
+    -extensions v3_req
 fi
 
 rm -f "$OPENSSL_CNF"
