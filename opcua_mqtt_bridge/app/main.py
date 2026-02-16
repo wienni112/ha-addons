@@ -542,16 +542,42 @@ async def run_bridge_forever():
             # Load tags for runtime (after possible merge/write)
             tags = load_tags(tags_file)
 
+            log.info("Loaded %d read tags, %d rw tags from %s",
+                     len(tags.get("read", [])),
+                     len(tags.get("rw", [])),
+                     tags_file)
+
+            for t in tags.get("read", []):
+                log.info("READ  tag: path=%s node=%s type=%s",
+                         t.get("path"),
+                         t.get("node"),
+                         t.get("type"))
+
+            for t in tags.get("rw", []):
+                log.info("WRITE tag: path=%s node=%s type=%s",
+                         t.get("path"),
+                         t.get("node"),
+                         t.get("type"))
+
+            
             handler = SubHandler(mqtt_client, prefix, qos_state, retain_states, log)
             subscription = await client.create_subscription(publishing_interval_ms, handler)
 
             # Read nodes
+
             for tag in tags.get("read", []):
                 path = tag["path"]
                 nodeid = tag["node"]
-                node = client.get_node(nodeid)
-                handler.nodeid_to_path[node.nodeid.to_string()] = path
-                await subscription.subscribe_data_change(node)
+
+                log.info("Subscribing READ: %s -> %s", path, nodeid)
+
+                try:
+                    node = client.get_node(ua.NodeId.from_string(nodeid))
+                    handler.nodeid_to_path[node.nodeid.to_string()] = path
+                    await subscription.subscribe_data_change(node)
+                except Exception as e:
+                    log.error("Failed to subscribe READ %s (%s): %s", path, nodeid, e)
+                    raise
 
             # RW nodes
             write_nodes.clear()
@@ -559,10 +585,17 @@ async def run_bridge_forever():
                 path = tag["path"]
                 nodeid = tag["node"]
                 t = tag.get("type", "float")
-                node = client.get_node(nodeid)
-                handler.nodeid_to_path[node.nodeid.to_string()] = path
-                write_nodes[path] = (node, t)
-                await subscription.subscribe_data_change(node)
+
+                log.info("Subscribing WRITE: %s -> %s", path, nodeid)
+
+                try:
+                    node = client.get_node(ua.NodeId.from_string(nodeid))
+                    handler.nodeid_to_path[node.nodeid.to_string()] = path
+                    write_nodes[path] = (node, t)
+                    await subscription.subscribe_data_change(node)
+                except Exception as e:
+                    log.error("Failed to subscribe WRITE %s (%s): %s", path, nodeid, e)
+                    raise
 
             log.info("Subscribed read=%d, rw=%d", len(tags.get("read", [])), len(tags.get("rw", [])))
 
