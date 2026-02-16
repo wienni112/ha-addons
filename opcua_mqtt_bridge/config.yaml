@@ -28,7 +28,7 @@ options:
     url: "opc.tcp://172.22.20.11:4840"
     security_policy: "Basic128Rsa15"
     security_mode: "SignAndEncrypt"
-    "application_uri_suffix": "OPCUA2MQTT"
+    application_uri_suffix: "OPCUA2MQTT"
     username: ""
     password: ""
     publishing_interval_ms: 200
