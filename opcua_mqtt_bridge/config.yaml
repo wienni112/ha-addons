@@ -1,7 +1,7 @@
 name: "OPC UA ↔ MQTT Bridge (Subscriptions)"
 slug: "opcua_mqtt_bridge"
 description: "High speed bidirectional OPC UA to MQTT bridge using UA Subscriptions"
-version: "0.1.15"
+version: "0.1.16"
 arch:
   - amd64
   - aarch64
@@ -59,7 +59,11 @@ options:
       include_only_prefixes:
         - "DB"
         - "DataBlocksGlobal"
-
+  pki:
+    cert_o: "HA"
+    cert_c: "DE"
+    cert_st: ""     # optional
+    cert_l: ""      # optional
 schema:
   log:
     level: list(DEBUG|INFO|WARNING|ERROR|CRITICAL)
@@ -99,3 +103,8 @@ schema:
         - str?
       include_only_prefixes:
         - str?
+  pki:
+    cert_o: str?
+    cert_c: str?
+    cert_st: str?
+    cert_l: str?
