@@ -470,10 +470,12 @@ async def run_bridge_forever():
             client = Client(url)
 
             # Application URI
-            host_actual = (os.getenv("HOSTNAME") or socket.gethostname() or "ha-addon").strip()
-            default_app_uri = f"urn:{host_actual}:ha:OPCUA2MQTT"
-            app_uri = (opc_cfg.get("application_uri") or default_app_uri).strip()
+            host_actual = (socket.gethostname() or "ha-addon").strip()
 
+            uri_suffix = (opc_cfg.get("application_uri_suffix") or "OPCUA2MQTT").strip()
+            default_app_uri = f"urn:{host_actual}:HA:{uri_suffix}"
+
+            app_uri = (opc_cfg.get("application_uri") or default_app_uri).strip()
             log.info("Using OPC UA ApplicationUri: %s", app_uri)
 
             if hasattr(client, "set_application_uri"):
