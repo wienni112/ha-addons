@@ -1,7 +1,7 @@
 name: "OPC UA ↔ MQTT Bridge (Subscriptions)"
 slug: "opcua_mqtt_bridge"
 description: "High speed bidirectional OPC UA to MQTT bridge using UA Subscriptions"
-version: "0.1.9"
+version: "0.1.10"
 arch:
   - amd64
   - aarch64
@@ -41,6 +41,21 @@ options:
     retain_states: true
   bridge:
     tags_file: "/config/opcua_mqtt_bridge/tags.yaml"
+        # NEW
+    auto_export_on_first_run: true
+    export_file: "/config/opcua_mqtt_bridge/opcua-structure.json"
+    generated_tags_file: "/config/opcua_mqtt_bridge/tags.generated.yaml"
+    merge_into_tags_file: true
+
+    browse:
+      max_depth: 12
+      namespace_filter: [3]
+      exclude_path_prefixes:
+        - "Server/"
+        - "ServerStatus/"
+      include_only_prefixes:
+        - "DB"
+        - "DataBlocksGlobal"
 
 schema:
   opcua:
@@ -63,3 +78,17 @@ schema:
     retain_states: bool
   bridge:
     tags_file: str
+      # NEW: Discovery/Export
+    auto_export_on_first_run: bool?
+    export_file: str?
+    generated_tags_file: str?
+    merge_into_tags_file: bool?
+
+    browse:
+      max_depth: int?
+      namespace_filter:
+        - int?
+      exclude_path_prefixes:
+        - str?
+      include_only_prefixes:
+        - str?
