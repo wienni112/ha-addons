@@ -256,7 +256,7 @@ def normalize_topic(prefix: str, suffix: str) -> str:
 
 
 # -----------------------------
-# OPC UA security mapping
+# OPC UA secty mapping
 # -----------------------------
 def map_security_policy(policy: str):
     p = (policy or "None").strip()
@@ -518,8 +518,13 @@ async def run_bridge_forever():
             uri_suffix = (opc_cfg.get("application_uri_suffix") or "OPCUA2MQTT").strip()
             default_app_uri = f"urn:{host_actual}:HA:{uri_suffix}"
 
-            app_uri = (opc_cfg.get("application_uri") or default_app_uri).strip()
-            log.info("Using OPC UA ApplicationUri: %s", app_uri)
+            raw_app_uri = (opc_cfg.get("application_uri") or "").strip()
+
+            # Wenn application_uri NICHT wie urn:... aussieht -> ignorieren und default nutzen
+            if raw_app_uri.lower().startswith("urn:"):
+                app_uri = raw_app_uri
+            else:
+                app_uri = default_app_uri
 
             pol = map_security_policy(security_policy)
             mode = map_security_mode(security_mode)
