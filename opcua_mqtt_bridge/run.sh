@@ -63,49 +63,59 @@ fi
 echo "[opcua_mqtt_bridge] Preparing PKI..."
 mkdir -p "$PKI_DIR"
 
+CERT_O="$(python3 - <<'PY'
+import json
+o=json.load(open("/data/options.json","r",encoding="utf-8"))
+print(((o.get("pki") or {}).get("cert_o")) or "HA")
+PY
+)"
+CERT_C="$(python3 - <<'PY'
+import json
+o=json.load(open("/data/options.json","r",encoding="utf-8"))
+print(((o.get("pki") or {}).get("cert_c")) or "DE")
+PY
+)"
+CERT_ST="$(python3 - <<'PY'
+import json
+o=json.load(open("/data/options.json","r",encoding="utf-8"))
+print(((o.get("pki") or {}).get("cert_st")) or "")
+PY
+)"
+CERT_L="$(python3 - <<'PY'
+import json
+o=json.load(open("/data/options.json","r",encoding="utf-8"))
+print(((o.get("pki") or {}).get("cert_l")) or "")
+PY
+)"
+
 OPENSSL_CNF="$(mktemp)"
 
-# Basis-DN (nur Pflichtfelder)
-cat > "$OPENSSL_CNF" <<EOF
-[ req ]
-distinguished_name = dn
-x509_extensions = v3_req
-prompt = no
-
-[ dn ]
-CN = ${ADDON_HOSTNAME}
-O  = ${CERT_O}
-C  = ${CERT_C}
-
-[ v3_req ]
-basicConstraints = CA:FALSE
-keyUsage = digitalSignature, nonRepudiation, keyEncipherment, keyAgreement
-extendedKeyUsage = clientAuth
-subjectAltName = @alt_names
-
-[ alt_names ]
-DNS.1 = ${ADDON_HOSTNAME}
-URI.1 = ${APP_URI}
-EOF
-
-# Optional DN-Felder nur wenn gesetzt
-if [[ -n "${CERT_ST}" ]]; then
-  # Einfügen direkt nach C-Zeile in [dn] (einfach ans Ende der [dn]-Sektion hängen ist auch ok)
-  sed -i "/^C  =/a ST = ${CERT_ST}" "$OPENSSL_CNF"
-fi
-
-if [[ -n "${CERT_L}" ]]; then
-  sed -i "/^C  =/a L  = ${CERT_L}" "$OPENSSL_CNF"
-fi
-
-# Optional IP SAN
-if [[ -n "${ADDON_IP}" ]]; then
-  echo "IP.1 = ${ADDON_IP}" >> "$OPENSSL_CNF"
-fi
-
-if [[ -n "${ADDON_IP}" ]]; then
-  echo "IP.1 = ${ADDON_IP}" >> "$OPENSSL_CNF"
-fi
+{
+  echo "[ req ]"
+  echo "distinguished_name = dn"
+  echo "x509_extensions = v3_req"
+  echo "prompt = no"
+  echo ""
+  echo "[ dn ]"
+  echo "CN = ${ADDON_HOSTNAME}"
+  echo "O  = ${CERT_O}"
+  echo "C  = ${CERT_C}"
+  # ST/L nur wenn gesetzt (sonst ASN1 'string too short')
+  if [[ -n "${CERT_ST}" ]]; then echo "ST = ${CERT_ST}"; fi
+  if [[ -n "${CERT_L}"  ]]; then echo "L  = ${CERT_L}";  fi
+  echo ""
+  echo "[ v3_req ]"
+  echo "basicConstraints = critical,CA:FALSE"
+  echo "keyUsage = critical,digitalSignature,nonRepudiation,keyEncipherment,dataEncipherment"
+  # EKU WICHTIG! (Siemens/OPC UA Server wollen das oft)
+  echo "extendedKeyUsage = critical,serverAuth,clientAuth"
+  echo "subjectAltName = @alt_names"
+  echo ""
+  echo "[ alt_names ]"
+  echo "DNS.1 = ${ADDON_HOSTNAME}"
+  echo "URI.1 = ${APP_URI}"
+  if [[ -n "${ADDON_IP}" ]]; then echo "IP.1 = ${ADDON_IP}"; fi
+} > "$OPENSSL_CNF"
 
 if [[ ! -f "$CLIENT_CERT_PEM" || ! -f "$CLIENT_KEY_PEM" ]]; then
   echo "[opcua_mqtt_bridge] Generating OPC UA client certificate"
