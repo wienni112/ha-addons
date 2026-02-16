@@ -1,7 +1,7 @@
 name: "OPC UA ↔ MQTT Bridge (Subscriptions)"
 slug: "opcua_mqtt_bridge"
 description: "High speed bidirectional OPC UA to MQTT bridge using UA Subscriptions"
-version: "0.1.13"
+version: "0.1.14"
 arch:
   - amd64
   - aarch64
@@ -20,8 +20,11 @@ map:
   - ssl:ro
 
 options:
+  log:
+    level: INFO
+    asyncua: WARNING
+    paho: WARNING
   opcua:
-    
     url: "opc.tcp://172.22.20.11:4840"
     security_policy: "Basic128Rsa15"
     security_mode: "SignAndEncrypt"
@@ -58,6 +61,10 @@ options:
         - "DataBlocksGlobal"
 
 schema:
+  log:
+    level: list(DEBUG|INFO|WARNING|ERROR|CRITICAL)
+    asyncua: list(DEBUG|INFO|WARNING|ERROR|CRITICAL)
+    paho: list(DEBUG|INFO|WARNING|ERROR|CRITICAL)
   opcua:
     url: str
     security_policy: list(None|Basic128Rsa15|Basic256|Basic256Sha256)
