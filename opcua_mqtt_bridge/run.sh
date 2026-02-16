@@ -12,9 +12,19 @@ ADDON_HOSTNAME="$(hostname 2>/dev/null || cat /etc/hostname)"
 ADDON_IP="$(hostname -i 2>/dev/null | awk '{print $1}' || true)"
 
 # Suffix aus config
-URI_SUFFIX="$(bashio::config 'application_uri_suffix')"
-URI_SUFFIX="${URI_SUFFIX:-OPCUA2MQTT}"
+# Suffix aus options.json (ohne bashio)
+URI_SUFFIX="$(python3 - <<'PY'
+import json
+try:
+    with open("/data/options.json","r",encoding="utf-8") as f:
+        opts=json.load(f)
+    print((opts.get("opcua",{}) or {}).get("application_uri_suffix","OPCUA2MQTT") or "OPCUA2MQTT")
+except Exception:
+    print("OPCUA2MQTT")
+PY
+)"
 
+echo "[opcua_mqtt_bridge] application_uri_suffix: ${URI_SUFFIX}"
 APP_URI="urn:${ADDON_HOSTNAME}:HA:${URI_SUFFIX}"
 echo "[opcua_mqtt_bridge] Using Application URI: $APP_URI"
 
@@ -101,4 +111,4 @@ ln -sf "${CLIENT_KEY_PEM}"  "${PKI_DIR}/client_key.pem"
 ln -sf "${CLIENT_CERT_DER}" "${PKI_DIR}/client_cert.der"
 
 echo "[opcua_mqtt_bridge] Starting bridge..."
-exec python3 /app/main.py
+exec python3 -u /app/main.py
