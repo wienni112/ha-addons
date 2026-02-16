@@ -402,8 +402,41 @@ async def mqtt_connect_or_fail(mqtt_client: mqtt.Client, cfg: Dict[str, Any], lo
 async def run_bridge_forever():
     opts = load_options()
 
-    logging.basicConfig(level=logging.INFO)
+    # -----------------------------
+    # Logging configuration
+    # -----------------------------
+    log_cfg = opts.get("log", {}) or {}
+
+    level_name = (log_cfg.get("level") or "INFO").upper()
+    asyncua_level = (log_cfg.get("asyncua") or "WARNING").upper()
+    paho_level = (log_cfg.get("paho") or "WARNING").upper()
+
+    numeric_level = getattr(logging, level_name, logging.INFO)
+
+    logging.basicConfig(
+        level=numeric_level,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        force=True,
+    )
+
     log = logging.getLogger("opcua_mqtt_bridge")
+
+    # Sub-Logger gezielt setzen
+    for n in (
+        "asyncua",
+        "asyncua.client",
+        "asyncua.client.ua_client",
+        "asyncua.crypto",
+    ):
+        logging.getLogger(n).setLevel(getattr(logging, asyncua_level, logging.WARNING))
+
+    for n in (
+        "paho",
+        "paho.mqtt",
+    ):
+        logging.getLogger(n).setLevel(getattr(logging, paho_level, logging.WARNING))
+
+    log.info("Log levels → main=%s asyncua=%s paho=%s", level_name, asyncua_level, paho_level)
 
     bridge_cfg = opts.get("bridge", {}) or {}
     tags_file = bridge_cfg.get("tags_file", "/config/opcua_mqtt_bridge/tags.yaml")
@@ -493,9 +526,7 @@ async def run_bridge_forever():
             pol = map_security_policy(security_policy)
             mode = map_security_mode(security_mode)
 
-            security_enabled = not (
-                pol == SecurityPolicyNone or mode == ua.MessageSecurityMode.None_
-            )
+            security_enabled = not (pol == SecurityPolicyNone or mode == ua.MessageSecurityMode.None_)
 
             if security_enabled:
                 # ---- CERT FILE EXISTS CHECK ----
