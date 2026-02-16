@@ -280,6 +280,18 @@ def map_security_mode(mode: str):
         return ua.MessageSecurityMode.SignAndEncrypt
     raise ValueError(f"Unsupported security_mode: {mode}")
 
+import subprocess
+
+def cert_contains_uri(cert_pem_path: str, app_uri: str) -> bool:
+    try:
+        out = subprocess.check_output(
+            ["openssl", "x509", "-in", cert_pem_path, "-noout", "-text"],
+            text=True
+        )
+        return app_uri in out
+    except Exception:
+        return False
+
 
 # -----------------------------
 # Subscription Handler
@@ -461,7 +473,7 @@ async def run_bridge_forever():
             auto_trust_server = bool(opc_cfg.get("auto_trust_server", True))
 
             pki_dir = "/data/pki"
-            client_cert = os.path.join(pki_dir, "client_cert.der")
+            client_cert = os.path.join(pki_dir, "client_cert.pem")
             client_key = os.path.join(pki_dir, "client_key.pem")
             trusted_server_dir = os.path.join(pki_dir, "trusted_server")
             os.makedirs(trusted_server_dir, exist_ok=True)
@@ -478,6 +490,36 @@ async def run_bridge_forever():
             app_uri = (opc_cfg.get("application_uri") or default_app_uri).strip()
             log.info("Using OPC UA ApplicationUri: %s", app_uri)
 
+            pol = map_security_policy(security_policy)
+            mode = map_security_mode(security_mode)
+
+            security_enabled = not (
+                pol == SecurityPolicyNone or mode == ua.MessageSecurityMode.None_
+            )
+
+            if security_enabled:
+                # ---- CERT FILE EXISTS CHECK ----
+                if not os.path.exists(client_cert):
+                    raise FileNotFoundError(
+                        f"Client certificate missing: {client_cert}. "
+                        f"Delete /data/pki and restart the addon to regenerate certificates."
+                    )
+
+                if not os.path.exists(client_key):
+                    raise FileNotFoundError(
+                        f"Client private key missing: {client_key}. "
+                        f"Delete /data/pki and restart the addon to regenerate certificates."
+                    )
+
+                # ---- CERT URI VALIDATION ----
+                if not cert_contains_uri(client_cert, app_uri):
+                    raise RuntimeError(
+                        f"Client certificate does not contain ApplicationUri '{app_uri}'. "
+                        f"Delete /data/pki and restart to regenerate matching certificates."
+                    )
+            else:
+                log.warning("OPC UA security disabled (policy/mode None). Skipping cert checks.")
+
             if hasattr(client, "set_application_uri"):
                 client.set_application_uri(app_uri)
             else:
@@ -486,9 +528,6 @@ async def run_bridge_forever():
             if username:
                 client.set_user(username)
                 client.set_password(password)
-
-            pol = map_security_policy(security_policy)
-            mode = map_security_mode(security_mode)
 
             if pol is None or mode == ua.MessageSecurityMode.None_:
                 log.warning("OPC UA security disabled (policy/mode None).")
