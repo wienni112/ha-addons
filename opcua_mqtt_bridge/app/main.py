@@ -3,9 +3,7 @@ import json
 import logging
 import os
 import socket
-import ssl
-import time
-from typing import Any, Dict, Optional, Tuple, List
+from typing import Any, Dict, Optional, Tuple
 
 import yaml
 import paho.mqtt.client as mqtt
@@ -68,7 +66,7 @@ def parse_payload(payload: str, tag_type: str) -> Any:
     if t in ("datetime", "date", "time"):
         return v
 
-    # Fallback: try bool -> float -> string
+    # Fallback
     if v.lower() in ("true", "false", "on", "off", "1", "0"):
         return v.lower() in ("true", "on", "1")
     try:
@@ -111,81 +109,10 @@ def map_security_mode(mode: str):
 
 
 # -----------------------------
-# Certificate helpers (ApplicationUri matching!)
-# -----------------------------
-def _cert_extract_uris_der(cert_der_path: str) -> List[str]:
-    """
-    Siemens/OPC UA Server can reject if ApplicationUri in cert doesn't match.
-    We read URIs from SubjectAltName (URI) if present.
-    """
-    try:
-        from cryptography import x509
-        from cryptography.hazmat.backends import default_backend
-        from cryptography.x509.oid import ExtensionOID
-
-        with open(cert_der_path, "rb") as f:
-            der = f.read()
-        cert = x509.load_der_x509_certificate(der, default_backend())
-
-        uris: List[str] = []
-        try:
-            san = cert.extensions.get_extension_for_oid(ExtensionOID.SUBJECT_ALTERNATIVE_NAME).value
-            for u in san.get_values_for_type(x509.UniformResourceIdentifier):
-                if isinstance(u, str) and u:
-                    uris.append(u.strip())
-        except Exception:
-            pass
-
-        return [u for u in uris if u]
-    except Exception:
-        return []
-
-
-def choose_application_uri(opc_cfg: Dict[str, Any], client_cert_path: str, log: logging.Logger) -> str:
-    """
-    Priority:
-      1) If cert contains URI -> use that (or force-match if config differs)
-      2) Else opc_cfg.application_uri
-      3) Else env APP_URI
-      4) Else default urn:{hostname}:ha:OPCUA2MQTT
-    """
-    host = (os.getenv("HOSTNAME") or socket.gethostname() or "ha-addon").strip()
-    default_uri = f"urn:{host}:ha:OPCUA2MQTT"
-
-    cfg_uri = (opc_cfg.get("application_uri") or "").strip()
-    env_uri = (os.getenv("APP_URI") or "").strip()
-
-    cert_uris = _cert_extract_uris_der(client_cert_path) if os.path.exists(client_cert_path) else []
-    cert_uri = cert_uris[0].strip() if cert_uris else ""
-
-    # If we have a cert URI, ALWAYS use it to prevent BadCertificateUriInvalid
-    if cert_uri:
-        chosen = cfg_uri or env_uri or cert_uri or default_uri
-        if chosen != cert_uri:
-            log.warning(
-                "ApplicationUri mismatch would be rejected by server. "
-                "Config/Env wants '%s' but cert contains '%s'. Forcing cert URI.",
-                chosen,
-                cert_uri,
-            )
-        return cert_uri
-
-    # No URI in cert -> use config/env/default
-    return cfg_uri or env_uri or default_uri
-
-
-# -----------------------------
 # Subscription Handler
 # -----------------------------
 class SubHandler:
-    def __init__(
-        self,
-        mqtt_client: mqtt.Client,
-        topic_prefix: str,
-        qos_state: int,
-        retain_states: bool,
-        log: logging.Logger,
-    ):
+    def __init__(self, mqtt_client: mqtt.Client, topic_prefix: str, qos_state: int, retain_states: bool, log: logging.Logger):
         self.mqtt = mqtt_client
         self.prefix = topic_prefix.rstrip("/")
         self.qos = int(qos_state)
@@ -206,107 +133,73 @@ class SubHandler:
 
 
 # -----------------------------
-# MQTT setup helpers
+# MQTT connect helper (handles wrong creds)
 # -----------------------------
-def build_mqtt_client(mqtt_cfg: Dict[str, Any], log: logging.Logger) -> mqtt.Client:
-    client_id = mqtt_cfg.get("client_id") or ""
-
-    # Paho v2 deprecation: use Callback API v2 if available
-    try:
-        client = mqtt.Client(
-            client_id=client_id,
-            callback_api_version=mqtt.CallbackAPIVersion.VERSION2,  # type: ignore[attr-defined]
-        )
-    except Exception:
-        client = mqtt.Client(client_id=client_id)
-
-    if mqtt_cfg.get("username"):
-        client.username_pw_set(mqtt_cfg["username"], mqtt_cfg.get("password") or "")
-
-    # Optional TLS
-    if mqtt_cfg.get("tls", False):
-        ca = mqtt_cfg.get("tls_ca") or None
-        cert = mqtt_cfg.get("tls_cert") or None
-        key = mqtt_cfg.get("tls_key") or None
-        insecure = bool(mqtt_cfg.get("tls_insecure", False))
-
-        client.tls_set(
-            ca_certs=ca,
-            certfile=cert,
-            keyfile=key,
-            cert_reqs=ssl.CERT_REQUIRED if not insecure else ssl.CERT_NONE,
-            tls_version=ssl.PROTOCOL_TLS_CLIENT,
-        )
-        client.tls_insecure_set(insecure)
-
-    # Some brokers require this
-    client.reconnect_delay_set(min_delay=1, max_delay=30)
-
-    return client
+class MqttConnectError(RuntimeError):
+    pass
 
 
-async def mqtt_connect_and_wait(
-    mqtt_client: mqtt.Client,
-    mqtt_cfg: Dict[str, Any],
-    availability_topic: str,
-    log: logging.Logger,
-) -> bool:
-    connected = asyncio.Event()
+async def mqtt_connect_or_fail(mqtt_client: mqtt.Client, cfg: Dict[str, Any], log: logging.Logger) -> None:
+    """
+    Connect to MQTT and wait for on_connect result.
+    If credentials are wrong (rc=5), fail fast with clear error.
+    """
+    connected_evt = asyncio.Event()
+    result: Dict[str, Any] = {"rc": None}
 
-    def on_connect(_client, _userdata, _flags, rc, _props=None):
-        if rc == 0:
-            log.info("MQTT connected")
-            connected.set()
-        else:
-            log.error("MQTT connect failed rc=%s", rc)
+    def on_connect(_client, _userdata, _flags, rc, properties=None):  # properties for v2
+        result["rc"] = rc
+        connected_evt.set()
 
-    def on_disconnect(_client, _userdata, rc, _props=None):
+    def on_disconnect(_client, _userdata, rc, properties=None):
+        # rc=0: clean disconnect, rc>0: unexpected
         log.warning("MQTT disconnected rc=%s", rc)
 
     mqtt_client.on_connect = on_connect
     mqtt_client.on_disconnect = on_disconnect
 
-    # Last Will: if we die unexpectedly
-    mqtt_client.will_set(availability_topic, "offline", qos=1, retain=True)
+    host = cfg["host"]
+    port = int(cfg["port"])
+    keepalive = int(cfg.get("keepalive", 60))
 
-    host = mqtt_cfg["host"]
-    port = int(mqtt_cfg["port"])
-    keepalive = int(mqtt_cfg.get("keepalive", 60))
+    # connect_async + loop_start so we don't block
+    mqtt_client.connect_async(host, port, keepalive=keepalive)
+    mqtt_client.loop_start()
 
     try:
-        mqtt_client.connect(host, port, keepalive=keepalive)
-        mqtt_client.loop_start()
-    except Exception as e:
-        log.error("MQTT initial connect exception: %s", e)
-        return False
+        await asyncio.wait_for(connected_evt.wait(), timeout=10)
+    except asyncio.TimeoutError as e:
+        raise MqttConnectError("MQTT connect timeout (no CONNACK received).") from e
 
-    # Wait a bit for connection (non-blocking overall)
-    try:
-        await asyncio.wait_for(connected.wait(), timeout=8.0)
-        return True
-    except asyncio.TimeoutError:
-        log.error("MQTT connect timeout (check host/port/credentials).")
-        return False
+    rc = result["rc"]
+    if rc == 0:
+        log.info("MQTT connected to %s:%s", host, port)
+        return
+
+    # Common Paho rc meanings:
+    # 1: incorrect protocol version
+    # 2: invalid client identifier
+    # 3: server unavailable
+    # 4: bad username or password (some brokers use 4)
+    # 5: not authorized (very common for wrong creds/ACL)
+    if rc in (4, 5):
+        raise MqttConnectError(f"MQTT authentication/authorization failed (rc={rc}). Check username/password + ACLs on the broker.")
+    raise MqttConnectError(f"MQTT connect failed (rc={rc}).")
 
 
 # -----------------------------
 # Main bridge
 # -----------------------------
 async def run_bridge_forever():
-    # Logging early
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
-    log = logging.getLogger("opcua_mqtt_bridge")
-
     opts = load_options()
 
-    # Load tags
+    logging.basicConfig(level=logging.INFO)
+    log = logging.getLogger("opcua_mqtt_bridge")
+
     tags_file = opts["bridge"]["tags_file"]
     tags = load_tags(tags_file)
 
-    # MQTT
+    # MQTT config
     mqtt_cfg = opts["mqtt"]
     prefix = mqtt_cfg["topic_prefix"].rstrip("/")
     qos_state = int(mqtt_cfg.get("qos_state", 0))
@@ -315,19 +208,31 @@ async def run_bridge_forever():
 
     availability_topic = normalize_topic(prefix, "meta/availability")
 
-    mqtt_client = build_mqtt_client(mqtt_cfg, log)
+    # Use Paho Callback API v2 to avoid deprecation warnings
+    mqtt_client = mqtt.Client(
+        client_id=mqtt_cfg.get("client_id") or "",
+        callback_api_version=mqtt.CallbackAPIVersion.VERSION2,
+    )
 
-    mqtt_ok = await mqtt_connect_and_wait(mqtt_client, mqtt_cfg, availability_topic, log)
-    if not mqtt_ok:
-        # Still continue bridge loop; we will retry MQTT in reconnect cycles
-        mqtt_client.publish(availability_topic, "offline", retain=True)
-    else:
-        mqtt_client.publish(availability_topic, "online", retain=True)
+    if mqtt_cfg.get("username"):
+        mqtt_client.username_pw_set(mqtt_cfg["username"], mqtt_cfg.get("password") or "")
 
-    # Async loop ref for thread-safe scheduling from paho callbacks
+    # LWT (Last Will) -> broker sets offline if we vanish
+    mqtt_client.will_set(availability_topic, "offline", qos=1, retain=True)
+
+    # Connect MQTT (fail fast on bad creds)
+    try:
+        await mqtt_connect_or_fail(mqtt_client, mqtt_cfg, log)
+    except MqttConnectError as e:
+        # "Fail hard" makes it obvious in HA logs and avoids endless reconnect spam
+        log.error("%s", e)
+        raise
+
+    # We are online on MQTT side now
+    mqtt_client.publish(availability_topic, "online", qos=1, retain=True)
+
     loop = asyncio.get_running_loop()
 
-    # Write-map: path -> (node, type)
     write_nodes: Dict[str, Tuple[Any, str]] = {}
 
     backoff = 1
@@ -348,7 +253,6 @@ async def run_bridge_forever():
             publishing_interval_ms = int(opc_cfg.get("publishing_interval_ms", 200))
             auto_trust_server = bool(opc_cfg.get("auto_trust_server", True))
 
-            # PKI paths
             pki_dir = "/data/pki"
             client_cert = os.path.join(pki_dir, "client_cert.der")
             client_key = os.path.join(pki_dir, "client_key.pem")
@@ -358,8 +262,11 @@ async def run_bridge_forever():
 
             client = Client(url)
 
-            # ApplicationUri MUST match cert (Siemens rejects otherwise)
-            app_uri = choose_application_uri(opc_cfg, client_cert, log)
+            # Application URI
+            host_actual = (os.getenv("HOSTNAME") or socket.gethostname() or "ha-addon").strip()
+            default_app_uri = f"urn:{host_actual}:ha:OPCUA2MQTT"
+            app_uri = (opc_cfg.get("application_uri") or default_app_uri).strip()
+
             log.info("Using OPC UA ApplicationUri: %s", app_uri)
 
             if hasattr(client, "set_application_uri"):
@@ -367,16 +274,14 @@ async def run_bridge_forever():
             else:
                 client.application_uri = app_uri
 
-            # Username/Password
             if username:
                 client.set_user(username)
                 client.set_password(password)
 
-            # Security
             pol = map_security_policy(security_policy)
             mode = map_security_mode(security_mode)
 
-            if pol is SecurityPolicyNone or mode == ua.MessageSecurityMode.None_:
+            if pol is None or mode == ua.MessageSecurityMode.None_:
                 log.warning("OPC UA security disabled (policy/mode None).")
             else:
                 if (not auto_trust_server) and (not os.path.exists(server_cert_path)):
@@ -394,7 +299,6 @@ async def run_bridge_forever():
                         pol,
                         certificate=client_cert,
                         private_key=client_key,
-                        # server_certificate intentionally omitted
                     )
                 else:
                     log.info("Strict server cert pinning enabled: %s", server_cert_path)
@@ -405,21 +309,13 @@ async def run_bridge_forever():
                         server_certificate=server_cert_path,
                     )
 
-            # Connect
             await client.connect()
             log.info("Connected to OPC UA: %s", url)
 
-            # MQTT availability
-            try:
-                mqtt_client.publish(availability_topic, "online", retain=True)
-            except Exception:
-                pass
-
-            # Subscription
             handler = SubHandler(mqtt_client, prefix, qos_state, retain_states, log)
             subscription = await client.create_subscription(publishing_interval_ms, handler)
 
-            # Subscribe read nodes
+            # Read nodes
             for tag in tags.get("read", []):
                 path = tag["path"]
                 nodeid = tag["node"]
@@ -427,7 +323,7 @@ async def run_bridge_forever():
                 handler.nodeid_to_path[node.nodeid.to_string()] = path
                 await subscription.subscribe_data_change(node)
 
-            # Subscribe rw nodes and build write map
+            # RW nodes
             write_nodes.clear()
             for tag in tags.get("rw", []):
                 path = tag["path"]
@@ -440,14 +336,13 @@ async def run_bridge_forever():
 
             log.info("Subscribed read=%d, rw=%d", len(tags.get("read", [])), len(tags.get("rw", [])))
 
-            # MQTT write handler
             cmd_prefix = normalize_topic(prefix, "cmd/")
 
             def on_message(_client_m, _userdata, msg):
                 try:
                     if not msg.topic.startswith(cmd_prefix):
                         return
-                    path = msg.topic[len(cmd_prefix) :]
+                    path = msg.topic[len(cmd_prefix):]
                     if path not in write_nodes:
                         return
 
@@ -468,22 +363,14 @@ async def run_bridge_forever():
             mqtt_client.on_message = on_message
             mqtt_client.subscribe(normalize_topic(prefix, "cmd/#"), qos=qos_cmd)
 
-            # Reset backoff on success
             backoff = 1
 
-            # Idle loop
             while True:
                 await asyncio.sleep(1)
 
         except Exception as e:
             log.error("Bridge error: %s", e)
 
-            try:
-                mqtt_client.publish(availability_topic, "offline", retain=True)
-            except Exception:
-                pass
-
-            # Cleanup
             try:
                 if subscription is not None:
                     await subscription.delete()
@@ -495,6 +382,9 @@ async def run_bridge_forever():
                     await client.disconnect()
             except Exception:
                 pass
+
+            # optional: publish offline if OPC UA down (MQTT still alive)
+            mqtt_client.publish(availability_topic, "offline", qos=1, retain=True)
 
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, backoff_max)
