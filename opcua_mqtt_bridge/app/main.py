@@ -414,11 +414,8 @@ async def run_bridge_forever():
 
     numeric_level = getattr(logging, level_name, logging.INFO)
 
-    logging.basicConfig(
-        level=numeric_level,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        force=True,
-    )
+    log = logging.getLogger("opcua_mqtt_bridge")
+    log.info("Logging initialized (level=%s)", level_name)
 
     log = logging.getLogger("opcua_mqtt_bridge")
 
