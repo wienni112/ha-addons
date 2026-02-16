@@ -20,7 +20,10 @@ try:
         opts=json.load(f)
     cur=opts
     for key in path.split("."):
-        cur = (cur or {}).get(key)
+        if not isinstance(cur, dict):
+            cur = None
+            break
+        cur = cur.get(key)
     print(cur if (cur is not None and cur != "") else default)
 except Exception:
     print(default)
@@ -63,31 +66,6 @@ fi
 echo "[opcua_mqtt_bridge] Preparing PKI..."
 mkdir -p "$PKI_DIR"
 
-CERT_O="$(python3 - <<'PY'
-import json
-o=json.load(open("/data/options.json","r",encoding="utf-8"))
-print(((o.get("pki") or {}).get("cert_o")) or "HA")
-PY
-)"
-CERT_C="$(python3 - <<'PY'
-import json
-o=json.load(open("/data/options.json","r",encoding="utf-8"))
-print(((o.get("pki") or {}).get("cert_c")) or "DE")
-PY
-)"
-CERT_ST="$(python3 - <<'PY'
-import json
-o=json.load(open("/data/options.json","r",encoding="utf-8"))
-print(((o.get("pki") or {}).get("cert_st")) or "")
-PY
-)"
-CERT_L="$(python3 - <<'PY'
-import json
-o=json.load(open("/data/options.json","r",encoding="utf-8"))
-print(((o.get("pki") or {}).get("cert_l")) or "")
-PY
-)"
-
 OPENSSL_CNF="$(mktemp)"
 
 {
@@ -100,14 +78,12 @@ OPENSSL_CNF="$(mktemp)"
   echo "CN = ${ADDON_HOSTNAME}"
   echo "O  = ${CERT_O}"
   echo "C  = ${CERT_C}"
-  # ST/L nur wenn gesetzt (sonst ASN1 'string too short')
   if [[ -n "${CERT_ST}" ]]; then echo "ST = ${CERT_ST}"; fi
   if [[ -n "${CERT_L}"  ]]; then echo "L  = ${CERT_L}";  fi
   echo ""
   echo "[ v3_req ]"
   echo "basicConstraints = critical,CA:FALSE"
   echo "keyUsage = critical,digitalSignature,nonRepudiation,keyEncipherment,dataEncipherment"
-  # EKU WICHTIG! (Siemens/OPC UA Server wollen das oft)
   echo "extendedKeyUsage = critical,serverAuth,clientAuth"
   echo "subjectAltName = @alt_names"
   echo ""
@@ -124,11 +100,11 @@ if [[ ! -f "$CLIENT_CERT_PEM" || ! -f "$CLIENT_KEY_PEM" ]]; then
   [[ -n "${ADDON_IP}" ]] && echo "[opcua_mqtt_bridge]  - IP  SAN: ${ADDON_IP}"
 
   openssl req -x509 -newkey rsa:2048 -nodes \
-   -keyout "$CLIENT_KEY_PEM" \
-   -out "$CLIENT_CERT_PEM" \
-   -days 3650 \
-   -config "$OPENSSL_CNF" \
-   -extensions v3_req
+    -keyout "$CLIENT_KEY_PEM" \
+    -out "$CLIENT_CERT_PEM" \
+    -days 3650 \
+    -config "$OPENSSL_CNF" \
+    -extensions v3_req
 fi
 
 rm -f "$OPENSSL_CNF"
