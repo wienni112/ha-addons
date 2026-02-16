@@ -3,11 +3,12 @@ import json
 import logging
 import os
 import socket
-from typing import Any, Dict, Optional, Tuple
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple, List
 
 import yaml
 import paho.mqtt.client as mqtt
-from asyncua import Client, ua
+from asyncua import Client, ua, Node
 from asyncua.crypto.security_policies import (
     SecurityPolicyNone,
     SecurityPolicyBasic128Rsa15,
@@ -32,6 +33,177 @@ def load_tags(path: str) -> Dict[str, Any]:
     data.setdefault("read", [])
     data.setdefault("rw", [])
     return data
+
+
+# -----------------------------
+# Discovery / Export helpers
+# -----------------------------
+def _sanitize_path_part(s: str) -> str:
+    s = (s or "").strip()
+    repl = {"ä": "ae", "ö": "oe", "ü": "ue", "Ä": "Ae", "Ö": "Oe", "Ü": "Ue", "ß": "ss"}
+    for a, b in repl.items():
+        s = s.replace(a, b)
+    s = s.replace(" ", "_")
+
+    out = []
+    for ch in s:
+        if ch.isalnum() or ch in ("_", "-", "."):
+            out.append(ch.lower())
+        else:
+            out.append("_")
+
+    p = "".join(out)
+    while "__" in p:
+        p = p.replace("__", "_")
+    return p.strip("_")
+
+
+def _join_path(parts: List[str]) -> str:
+    return "/".join([_sanitize_path_part(p) for p in parts if p and str(p).strip()])
+
+
+def _tags_is_empty(tags: Dict[str, Any]) -> bool:
+    return (not tags.get("read")) and (not tags.get("rw"))
+
+
+def _access_can_write(access_level: int) -> bool:
+    # OPC UA AccessLevel bits: CurrentRead=0x01, CurrentWrite=0x02
+    return bool(access_level & 0x02)
+
+
+async def _browse_export(
+    client: Client,
+    max_depth: int,
+    namespace_filter: Optional[List[int]],
+    exclude_prefixes: List[str],
+    include_only_prefixes: Optional[List[str]],
+    log: logging.Logger,
+) -> Dict[str, Any]:
+    """
+    Export model:
+      nodes: [{ nodeId, browsePath, nodePath, displayName, dataType, accessLevel }]
+    """
+    root = client.nodes.objects
+    results: List[Dict[str, Any]] = []
+
+    async def walk(node: Node, path_parts: List[str], depth: int):
+        if depth > max_depth:
+            return
+        try:
+            children = await node.get_children()
+        except Exception:
+            return
+
+        for ch in children:
+            try:
+                bn = await ch.read_browse_name()
+                name = bn.Name or ""
+                new_parts = path_parts + [name]
+                node_path = "/".join(new_parts)
+
+                # Exclude prefixes (logical path)
+                if exclude_prefixes and any(node_path.startswith(p) for p in exclude_prefixes):
+                    continue
+
+                # Include-only: restrict by top-level segment
+                if include_only_prefixes:
+                    top = new_parts[0] if new_parts else ""
+                    if not any(top.startswith(p) for p in include_only_prefixes):
+                        continue
+
+                nclass = await ch.read_node_class()
+
+                if nclass == ua.NodeClass.Variable:
+                    nid = ch.nodeid
+                    if namespace_filter and (nid.NamespaceIndex not in namespace_filter):
+                        continue
+
+                    # DisplayName
+                    try:
+                        disp = await ch.read_display_name()
+                        display_name = disp.Text or name
+                    except Exception:
+                        display_name = name
+
+                    # DataType (best-effort)
+                    try:
+                        vtype = await ch.read_data_type_as_variant_type()
+                        data_type = str(vtype)
+                    except Exception:
+                        data_type = "Unknown"
+
+                    # AccessLevel
+                    try:
+                        al = await ch.read_attribute(ua.AttributeIds.AccessLevel)
+                        access_level = int(al.Value.Value)
+                    except Exception:
+                        access_level = 0
+
+                    results.append(
+                        {
+                            "nodeId": nid.to_string(),
+                            "browsePath": new_parts,
+                            "nodePath": node_path,
+                            "displayName": display_name,
+                            "dataType": data_type,
+                            "accessLevel": access_level,
+                        }
+                    )
+
+                # Walk deeper for Objects (and Variables to reach nested members)
+                if nclass in (ua.NodeClass.Object, ua.NodeClass.Variable):
+                    await walk(ch, new_parts, depth + 1)
+
+            except Exception:
+                continue
+
+    await walk(root, [], 0)
+
+    export = {
+        "version": 1,
+        "generatedAt": asyncio.get_running_loop().time(),
+        "endpoint": str(getattr(client, "server_url", "")),
+        "nodes": results,
+    }
+    log.info("Discovery export collected %d variables.", len(results))
+    return export
+
+
+def _export_to_tags(export: Dict[str, Any]) -> Dict[str, Any]:
+    tags = {"read": [], "rw": []}
+    for n in export.get("nodes", []):
+        path = _join_path(n.get("browsePath") or [])
+        entry = {
+            "path": path,
+            "node": n["nodeId"],
+            # Keep as string; your parse_payload() already has fallbacks.
+            "type": n.get("dataType", "float"),
+        }
+        if _access_can_write(int(n.get("accessLevel", 0))):
+            tags["rw"].append(entry)
+        else:
+            tags["read"].append(entry)
+    return tags
+
+
+def _merge_tags(existing: Dict[str, Any], generated: Dict[str, Any]) -> Dict[str, Any]:
+    # Keep existing entries by nodeId; add only missing nodes from generated.
+    existing_nodes = {
+        t.get("node")
+        for t in (existing.get("read", []) + existing.get("rw", []))
+        if t.get("node")
+    }
+    out = {"read": list(existing.get("read", [])), "rw": list(existing.get("rw", []))}
+
+    for e in generated.get("read", []):
+        if e.get("node") and e["node"] not in existing_nodes:
+            out["read"].append(e)
+
+    for e in generated.get("rw", []):
+        if e.get("node") and e["node"] not in existing_nodes:
+            out["rw"].append(e)
+
+    return out
 
 
 # -----------------------------
@@ -112,7 +284,14 @@ def map_security_mode(mode: str):
 # Subscription Handler
 # -----------------------------
 class SubHandler:
-    def __init__(self, mqtt_client: mqtt.Client, topic_prefix: str, qos_state: int, retain_states: bool, log: logging.Logger):
+    def __init__(
+        self,
+        mqtt_client: mqtt.Client,
+        topic_prefix: str,
+        qos_state: int,
+        retain_states: bool,
+        log: logging.Logger,
+    ):
         self.mqtt = mqtt_client
         self.prefix = topic_prefix.rstrip("/")
         self.qos = int(qos_state)
@@ -152,7 +331,6 @@ async def mqtt_connect_or_fail(mqtt_client: mqtt.Client, cfg: Dict[str, Any], lo
         connected_evt.set()
 
     def on_disconnect(_client, _userdata, rc, properties=None):
-        # rc=0: clean disconnect, rc>0: unexpected
         log.warning("MQTT disconnected rc=%s", rc)
 
     mqtt_client.on_connect = on_connect
@@ -162,7 +340,6 @@ async def mqtt_connect_or_fail(mqtt_client: mqtt.Client, cfg: Dict[str, Any], lo
     port = int(cfg["port"])
     keepalive = int(cfg.get("keepalive", 60))
 
-    # connect_async + loop_start so we don't block
     mqtt_client.connect_async(host, port, keepalive=keepalive)
     mqtt_client.loop_start()
 
@@ -176,14 +353,11 @@ async def mqtt_connect_or_fail(mqtt_client: mqtt.Client, cfg: Dict[str, Any], lo
         log.info("MQTT connected to %s:%s", host, port)
         return
 
-    # Common Paho rc meanings:
-    # 1: incorrect protocol version
-    # 2: invalid client identifier
-    # 3: server unavailable
-    # 4: bad username or password (some brokers use 4)
-    # 5: not authorized (very common for wrong creds/ACL)
     if rc in (4, 5):
-        raise MqttConnectError(f"MQTT authentication/authorization failed (rc={rc}). Check username/password + ACLs on the broker.")
+        raise MqttConnectError(
+            f"MQTT authentication/authorization failed (rc={rc}). "
+            "Check username/password + ACLs on the broker."
+        )
     raise MqttConnectError(f"MQTT connect failed (rc={rc}).")
 
 
@@ -196,8 +370,19 @@ async def run_bridge_forever():
     logging.basicConfig(level=logging.INFO)
     log = logging.getLogger("opcua_mqtt_bridge")
 
-    tags_file = opts["bridge"]["tags_file"]
-    tags = load_tags(tags_file)
+    bridge_cfg = opts.get("bridge", {}) or {}
+    tags_file = bridge_cfg.get("tags_file", "/config/opcua_mqtt_bridge/tags.yaml")
+
+    # Discovery/Export options
+    auto_export = bool(bridge_cfg.get("auto_export_on_first_run", False))
+    export_file = bridge_cfg.get("export_file", "/config/opcua_mqtt_bridge/opcua-structure.json")
+    generated_tags_file = bridge_cfg.get("generated_tags_file", "/config/opcua_mqtt_bridge/tags.generated.yaml")
+    merge_into = bool(bridge_cfg.get("merge_into_tags_file", True))
+    browse_cfg = bridge_cfg.get("browse", {}) or {}
+
+    # Preload existing tags if any (for merge decision / first run detection)
+    existing_tags = load_tags(tags_file) if os.path.exists(tags_file) else {"read": [], "rw": []}
+    need_export = auto_export and (not os.path.exists(export_file) or _tags_is_empty(existing_tags))
 
     # MQTT config
     mqtt_cfg = opts["mqtt"]
@@ -224,7 +409,6 @@ async def run_bridge_forever():
     try:
         await mqtt_connect_or_fail(mqtt_client, mqtt_cfg, log)
     except MqttConnectError as e:
-        # "Fail hard" makes it obvious in HA logs and avoids endless reconnect spam
         log.error("%s", e)
         raise
 
@@ -311,6 +495,52 @@ async def run_bridge_forever():
 
             await client.connect()
             log.info("Connected to OPC UA: %s", url)
+
+            # ---- NEW: Auto export/discovery on first run ----
+            if need_export:
+                max_depth = int(browse_cfg.get("max_depth", 12))
+                namespace_filter = browse_cfg.get("namespace_filter", [3])
+                exclude_prefixes = browse_cfg.get("exclude_path_prefixes", ["Server/", "ServerStatus/"])
+                include_only_prefixes = browse_cfg.get("include_only_prefixes", ["DB", "DataBlocksGlobal"])
+
+                export = await _browse_export(
+                    client=client,
+                    max_depth=max_depth,
+                    namespace_filter=namespace_filter,
+                    exclude_prefixes=exclude_prefixes,
+                    include_only_prefixes=include_only_prefixes,
+                    log=log,
+                )
+
+                Path(os.path.dirname(export_file)).mkdir(parents=True, exist_ok=True)
+                with open(export_file, "w", encoding="utf-8") as f:
+                    json.dump(export, f, ensure_ascii=False, indent=2)
+
+                generated = _export_to_tags(export)
+
+                Path(os.path.dirname(generated_tags_file)).mkdir(parents=True, exist_ok=True)
+                with open(generated_tags_file, "w", encoding="utf-8") as f:
+                    yaml.safe_dump(generated, f, sort_keys=False, allow_unicode=True)
+
+                if merge_into:
+                    merged = _merge_tags(existing_tags, generated)
+                    Path(os.path.dirname(tags_file)).mkdir(parents=True, exist_ok=True)
+                    with open(tags_file, "w", encoding="utf-8") as f:
+                        yaml.safe_dump(merged, f, sort_keys=False, allow_unicode=True)
+                    existing_tags = merged
+
+                log.info(
+                    "Auto-export completed. export=%s generated=%s merge_into=%s",
+                    export_file,
+                    generated_tags_file,
+                    tags_file if merge_into else "(disabled)",
+                )
+
+                # After first successful export, do not re-run in this process
+                need_export = False
+
+            # Load tags for runtime (after possible merge/write)
+            tags = load_tags(tags_file)
 
             handler = SubHandler(mqtt_client, prefix, qos_state, retain_states, log)
             subscription = await client.create_subscription(publishing_interval_ms, handler)
