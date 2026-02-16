@@ -64,6 +64,8 @@ echo "[opcua_mqtt_bridge] Preparing PKI..."
 mkdir -p "$PKI_DIR"
 
 OPENSSL_CNF="$(mktemp)"
+
+# Basis-DN (nur Pflichtfelder)
 cat > "$OPENSSL_CNF" <<EOF
 [ req ]
 distinguished_name = dn
@@ -74,12 +76,9 @@ prompt = no
 CN = ${ADDON_HOSTNAME}
 O  = ${CERT_O}
 C  = ${CERT_C}
-ST = ${CERT_ST}
-L  = ${CERT_L}
 
 [ v3_req ]
 basicConstraints = CA:FALSE
-# UA server mögen das oft so:
 keyUsage = digitalSignature, nonRepudiation, keyEncipherment, keyAgreement
 extendedKeyUsage = clientAuth
 subjectAltName = @alt_names
@@ -88,6 +87,21 @@ subjectAltName = @alt_names
 DNS.1 = ${ADDON_HOSTNAME}
 URI.1 = ${APP_URI}
 EOF
+
+# Optional DN-Felder nur wenn gesetzt
+if [[ -n "${CERT_ST}" ]]; then
+  # Einfügen direkt nach C-Zeile in [dn] (einfach ans Ende der [dn]-Sektion hängen ist auch ok)
+  sed -i "/^C  =/a ST = ${CERT_ST}" "$OPENSSL_CNF"
+fi
+
+if [[ -n "${CERT_L}" ]]; then
+  sed -i "/^C  =/a L  = ${CERT_L}" "$OPENSSL_CNF"
+fi
+
+# Optional IP SAN
+if [[ -n "${ADDON_IP}" ]]; then
+  echo "IP.1 = ${ADDON_IP}" >> "$OPENSSL_CNF"
+fi
 
 if [[ -n "${ADDON_IP}" ]]; then
   echo "IP.1 = ${ADDON_IP}" >> "$OPENSSL_CNF"
@@ -100,11 +114,11 @@ if [[ ! -f "$CLIENT_CERT_PEM" || ! -f "$CLIENT_KEY_PEM" ]]; then
   [[ -n "${ADDON_IP}" ]] && echo "[opcua_mqtt_bridge]  - IP  SAN: ${ADDON_IP}"
 
   openssl req -x509 -newkey rsa:2048 -nodes \
-    -keyout "$CLIENT_KEY_PEM" \
-    -out "$CLIENT_CERT_PEM" \
-    -days 3650 \
-    -config "$OPENSSL_CNF" \
-    -extensions v3_req
+   -keyout "$CLIENT_KEY_PEM" \
+   -out "$CLIENT_CERT_PEM" \
+   -days 3650 \
+   -config "$OPENSSL_CNF" \
+   -extensions v3_req
 fi
 
 rm -f "$OPENSSL_CNF"
