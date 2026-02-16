@@ -7,12 +7,10 @@ EXAMPLE_FILE="/app/tags.example.yaml"
 
 PKI_DIR="/data/pki"
 
-# tatsächlicher Container-Hostname (HA Add-on)
 ADDON_HOSTNAME="$(hostname 2>/dev/null || cat /etc/hostname)"
 ADDON_IP="$(hostname -i 2>/dev/null | awk '{print $1}' || true)"
 
-# Suffix aus config
-# Suffix aus options.json (ohne bashio)
+# application_uri_suffix aus options.json
 URI_SUFFIX="$(python3 - <<'PY'
 import json
 try:
@@ -25,19 +23,14 @@ PY
 )"
 
 echo "[opcua_mqtt_bridge] application_uri_suffix: ${URI_SUFFIX}"
+
 APP_URI="urn:${ADDON_HOSTNAME}:HA:${URI_SUFFIX}"
 echo "[opcua_mqtt_bridge] Using Application URI: $APP_URI"
 
 CERT_BASE="${ADDON_HOSTNAME}-${URI_SUFFIX}"
-
 CLIENT_CERT_PEM="${PKI_DIR}/${CERT_BASE}.pem"
 CLIENT_KEY_PEM="${PKI_DIR}/${CERT_BASE}.key.pem"
 CLIENT_CERT_DER="${PKI_DIR}/${CERT_BASE}.der"
-
-CERT_O="${CERT_O:-HA}"
-CERT_C="${CERT_C:-DE}"
-CERT_ST="${CERT_ST:-}"
-CERT_L="${CERT_L:-}"
 
 echo "[opcua_mqtt_bridge] Preparing config dir..."
 mkdir -p "$CFG_DIR"
@@ -59,8 +52,45 @@ fi
 echo "[opcua_mqtt_bridge] Preparing PKI..."
 mkdir -p "$PKI_DIR"
 
+# PKI Felder aus options.json (pki: cert_o/cert_c/cert_st/cert_l)
+CERT_O="$(python3 - <<'PY'
+import json
+try:
+  o=json.load(open("/data/options.json","r",encoding="utf-8"))
+  print(((o.get("pki") or {}).get("cert_o")) or "HA")
+except: print("HA")
+PY
+)"
+CERT_C="$(python3 - <<'PY'
+import json
+try:
+  o=json.load(open("/data/options.json","r",encoding="utf-8"))
+  print(((o.get("pki") or {}).get("cert_c")) or "DE")
+except: print("DE")
+PY
+)"
+CERT_ST="$(python3 - <<'PY'
+import json
+try:
+  o=json.load(open("/data/options.json","r",encoding="utf-8"))
+  print(((o.get("pki") or {}).get("cert_st")) or "")
+except: print("")
+PY
+)"
+CERT_L="$(python3 - <<'PY'
+import json
+try:
+  o=json.load(open("/data/options.json","r",encoding="utf-8"))
+  print(((o.get("pki") or {}).get("cert_l")) or "")
+except: print("")
+PY
+)"
+
 OPENSSL_CNF="$(mktemp)"
-cat > "$OPENSSL_CNF" <<EOF
+
+# OpenSSL Config schreiben – ST/L nur wenn nicht leer!
+{
+  cat <<EOF
 [ req ]
 distinguished_name = dn
 x509_extensions = v3_req
@@ -70,8 +100,12 @@ prompt = no
 CN = ${ADDON_HOSTNAME}
 O  = ${CERT_O}
 C  = ${CERT_C}
-ST = ${CERT_ST}
-L  = ${CERT_L}
+EOF
+
+  [[ -n "${CERT_ST}" ]] && echo "ST = ${CERT_ST}"
+  [[ -n "${CERT_L}"  ]] && echo "L  = ${CERT_L}"
+
+  cat <<EOF
 
 [ v3_req ]
 basicConstraints = CA:FALSE
@@ -84,9 +118,8 @@ DNS.1 = ${ADDON_HOSTNAME}
 URI.1 = ${APP_URI}
 EOF
 
-if [[ -n "${ADDON_IP}" ]]; then
-  echo "IP.1 = ${ADDON_IP}" >> "$OPENSSL_CNF"
-fi
+  [[ -n "${ADDON_IP}" ]] && echo "IP.1 = ${ADDON_IP}"
+} > "$OPENSSL_CNF"
 
 if [[ ! -f "$CLIENT_CERT_PEM" || ! -f "$CLIENT_KEY_PEM" ]]; then
   echo "[opcua_mqtt_bridge] Generating OPC UA client certificate"
@@ -105,7 +138,6 @@ rm -f "$OPENSSL_CNF"
 
 openssl x509 -in "$CLIENT_CERT_PEM" -outform der -out "$CLIENT_CERT_DER"
 
-# Symlinks NACHdem die Dateien existieren (für Python-Kompatibilität)
 ln -sf "${CLIENT_CERT_PEM}" "${PKI_DIR}/client_cert.pem"
 ln -sf "${CLIENT_KEY_PEM}"  "${PKI_DIR}/client_key.pem"
 ln -sf "${CLIENT_CERT_DER}" "${PKI_DIR}/client_cert.der"
