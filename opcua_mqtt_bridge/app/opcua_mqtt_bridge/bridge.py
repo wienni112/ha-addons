@@ -501,10 +501,11 @@ async def run_bridge_forever():
         except Exception as e:
             if str(e) == "reconnect_requested":
                 log.warning("Reconnect loop triggered.")
+                await asyncio.sleep(5)   # ✅ 5 Sekunden feste Pause vor Reconnect
             elif str(e) == "opc_connect_timeout":
                 log.warning("OPC connect timeout -> retrying")
             else:
-                log.error("Bridge error: %s", e)
+                log.exception("Bridge error")
             opc_online.clear()
             write_nodes.clear()
             for t in list(pending_write_tasks):
