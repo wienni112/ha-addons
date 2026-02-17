@@ -5,12 +5,12 @@ import logging
 import os
 import socket
 import sys
+import signal
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 import paho.mqtt.client as mqtt
 from asyncua import Client, ua
-from asyncua.crypto.security_policies import SecurityPolicyNone
 
 from .config import load_options
 from .topics import normalize_topic, topic_value, topic_status, topic_error
@@ -64,7 +64,17 @@ class SubHandler:
 
 async def run_bridge_forever():
     opts = load_options()
-
+    stop_event = asyncio.Event()
+    
+    loop = asyncio.get_running_loop()
+    for sig in ("SIGTERM", "SIGINT"):
+        try:
+            loop.add_signal_handler(
+                getattr(signal, sig),
+                stop_event.set
+            )
+        except Exception:
+            pass
     # Logging
     log_cfg = opts.get("log", {}) or {}
     level_name = (log_cfg.get("level") or "INFO").upper()
@@ -118,7 +128,6 @@ async def run_bridge_forever():
     await mqtt_connect_or_fail(mqtt_client, mqtt_cfg, log)
 
     mqtt_client.publish(availability_topic, "online", qos=1, retain=True)
-    loop = asyncio.get_running_loop()
 
     write_nodes: Dict[str, Tuple[Any, str]] = {}
     backoff = 1
@@ -153,8 +162,7 @@ async def run_bridge_forever():
             pol = map_security_policy(security_policy)
             mode = map_security_mode(security_mode)
 
-            security_enabled = (pol is not SecurityPolicyNone) and (mode != ua.MessageSecurityMode.None_)
-
+            security_enabled = (getattr(pol, "__name__", "") != "SecurityPolicyNone") and (mode != ua.MessageSecurityMode.None_)
 
             if security_enabled:
                 log.info("OPC UA requested security: policy=%s mode=%s", security_policy, security_mode)
@@ -329,9 +337,31 @@ async def run_bridge_forever():
             mqtt_client.subscribe(normalize_topic(prefix, "#"), qos=qos_cmd)
 
             backoff = 1
-            while True:
+            while not stop_event.is_set():
                 await asyncio.sleep(1)
+            # ---> STOP: sauber runterfahren
+            log.info("Stop signal received, shutting down...")
 
+            try:
+                if subscription is not None:
+                    await subscription.delete()
+            except Exception:
+                pass
+
+            try:
+                if client is not None:
+                    await client.disconnect()
+            except Exception:
+                pass
+
+            mqtt_client.publish(availability_topic, "offline", qos=1, retain=True)
+            try:
+                mqtt_client.disconnect()
+            except Exception:
+                pass
+            mqtt_client.loop_stop(force=True)
+            break  # <-- bricht das `while True` (äußere Schleife)
+        
         except Exception as e:
             log.error("Bridge error: %s", e)
 
@@ -348,6 +378,7 @@ async def run_bridge_forever():
                 pass
 
             mqtt_client.publish(availability_topic, "offline", qos=1, retain=True)
-
+            if stop_event.is_set():
+                break
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, backoff_max)
