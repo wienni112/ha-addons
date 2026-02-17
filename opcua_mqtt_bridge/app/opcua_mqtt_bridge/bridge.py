@@ -278,7 +278,7 @@ async def run_bridge_forever():
 
     # Connect + wait for first CONNACK
     await mqtt_connect_or_fail(mqtt_client, mqtt_cfg, log)
-    mqtt_client.loop_start()
+    
     # weil wir bereits verbunden sind (on_connect war schon), einmal sicherheitshalber:
     mqtt_client.subscribe(normalize_topic(prefix, "#"), qos=qos_cmd)
 
