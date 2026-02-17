@@ -155,7 +155,30 @@ async def run_bridge_forever():
     mqtt_client.will_set(availability_topic, "offline", qos=1, retain=True)
     await mqtt_connect_or_fail(mqtt_client, mqtt_cfg, log)
 
-    mqtt_client.publish(availability_topic, "online", qos=1, retain=True)
+    mqtt_client.reconnect_delay_set(min_delay=1, max_delay=10)
+    mqtt_client.enable_logger(logging.getLogger("paho.mqtt.client"))  # optional, aber super
+
+    def _rc_to_int(rc) -> int:
+        return int(getattr(rc, "value", rc if rc is not None else -1))
+
+    def on_connect_runtime(client, userdata, flags, reason_code, properties=None):
+        log.info("MQTT (re)connected rc=%s", _rc_to_int(reason_code))
+
+        # retained availability wieder online
+        client.publish(availability_topic, "online", qos=1, retain=True)
+
+        # nach Broker-Restart: subscriptions neu setzen
+        client.subscribe(normalize_topic(prefix, "#"), qos=qos_cmd)
+
+    def on_disconnect_runtime(client, userdata, disconnect_flags=None, reason_code=None, properties=None):
+        log.warning(
+            "MQTT disconnected flags=%s rc=%s",
+            disconnect_flags,
+            _rc_to_int(reason_code),
+        )
+
+    mqtt_client.on_connect = on_connect_runtime
+    mqtt_client.on_disconnect = on_disconnect_runtime
 
     write_nodes: Dict[str, Tuple[Any, str]] = {}
     backoff = 1
@@ -364,7 +387,6 @@ async def run_bridge_forever():
                     log.error("MQTT on_message error: %s", e)
 
             mqtt_client.on_message = on_message
-            mqtt_client.subscribe(normalize_topic(prefix, "#"), qos=qos_cmd)
 
             backoff = 1
             while not stop_event.is_set():
