@@ -78,6 +78,7 @@ class SubHandler:
         self.log = log
         self.on_status = on_status  # <-- hinzufügen
         self.nodeid_to_path: Dict[str, str] = {}
+        self._last_meta_ts = 0.0
 
     def datachange_notification(self, node, val, data):
         try:
@@ -101,6 +102,16 @@ class SubHandler:
                 payload = str(val)
 
             self.mqtt.publish(topic, payload, qos=self.qos, retain=self.retain)
+            # --- rate limited meta publish ---
+            now = asyncio.get_running_loop().time()
+            if now - self._last_meta_ts >= 5.0:  # maximal alle 5 Sekunden
+                self._last_meta_ts = now
+                self.mqtt.publish(
+                    normalize_topic(self.prefix, "meta/last_publish_ts"),
+                    datetime.datetime.utcnow().isoformat() + "Z",
+                    qos=1,
+                    retain=True,
+                )
 
         except Exception as e:
             self.log.warning("DataChange publish failed: %s", e)
@@ -179,6 +190,10 @@ async def run_bridge_forever():
     if mqtt_cfg.get("username"):
         mqtt_client.username_pw_set(mqtt_cfg["username"], mqtt_cfg.get("password") or "")
 
+    def pub_meta(name: str, payload: str, retain: bool = True, qos: int = 1):
+        # meta/<name> unter deinem prefix
+        mqtt_client.publish(normalize_topic(prefix, f"meta/{name}"), payload, qos=qos, retain=retain)
+    
     def _rc_to_int(rc) -> int:
         return int(getattr(rc, "value", rc if rc is not None else -1))
 
@@ -278,12 +293,20 @@ async def run_bridge_forever():
 
     # Connect + wait for first CONNACK
     await mqtt_connect_or_fail(mqtt_client, mqtt_cfg, log)
+    async def heartbeat_loop():
+        while not stop_event.is_set():
+            pub_meta("heartbeat_ts", datetime.datetime.utcnow().isoformat() + "Z", retain=True)
+            pub_meta("bridge_state", "running", retain=True)
+            await asyncio.sleep(10)
+
+    hb_task = asyncio.create_task(heartbeat_loop())
     
     # weil wir bereits verbunden sind (on_connect war schon), einmal sicherheitshalber:
     mqtt_client.subscribe(normalize_topic(prefix, "#"), qos=qos_cmd)
 
     backoff = 1
     backoff_max = 30
+    reconnect_count = 0
 
     while True:
         client: Optional[Client] = None
@@ -384,6 +407,8 @@ async def run_bridge_forever():
                 raise RuntimeError("opc_connect_timeout") from e
                 
             log.info("Connected to OPC UA: %s", url)
+            pub_meta("opc_state", "online", retain=True)
+            pub_meta("opc_last_ok_ts", datetime.datetime.utcnow().isoformat() + "Z", retain=True)
             write_nodes.clear()
             opc_online.set()
             reconnect_event.clear()
@@ -428,6 +453,9 @@ async def run_bridge_forever():
             tags = load_tags(tags_file)
 
             def _on_sub_status(_status):
+                nonlocal reconnect_count
+                reconnect_count += 1
+                pub_meta("reconnect_count", str(reconnect_count), retain=True)
                 opc_online.clear()
                 write_nodes.clear()  # <- neu
 
@@ -436,6 +464,8 @@ async def run_bridge_forever():
                 pending_write_tasks.clear()
 
                 mqtt_client.publish(availability_topic, "offline", qos=1, retain=True)
+                pub_meta("opc_state", "offline", retain=True)
+                pub_meta("reconnect_reason", str(_status), retain=True)
                 reconnect_event.set()
 
             handler = SubHandler(mqtt_client, prefix, qos_state, retain_states, log, on_status=_on_sub_status)
@@ -491,21 +521,39 @@ async def run_bridge_forever():
                 pass
 
             mqtt_client.publish(availability_topic, "offline", qos=1, retain=True)
+            # 2️⃣ Kurz warten damit Publish rausgeht
+            await asyncio.sleep(0.2)
+
+            # 3️⃣ Disconnect sauber anstoßen
             try:
                 mqtt_client.disconnect()
             except Exception:
                 pass
+
+            # 4️⃣ Loop stoppen (Thread beenden)
             mqtt_client.loop_stop()
+
+            # 5️⃣ Heartbeat Task sauber beenden
+            hb_task.cancel()
+            try:
+                await hb_task
+            except asyncio.CancelledError:
+                pass
             break
 
         except Exception as e:
             if str(e) == "reconnect_requested":
                 log.warning("Reconnect loop triggered.")
-                await asyncio.sleep(5)   # ✅ 5 Sekunden feste Pause vor Reconnect
+                await asyncio.sleep(2)  # feste Pause
             elif str(e) == "opc_connect_timeout":
                 log.warning("OPC connect timeout -> retrying")
+                reconnect_count += 1
+                pub_meta("reconnect_count", str(reconnect_count), retain=True)
+                pub_meta("reconnect_reason", "opc_connect_timeout", retain=True)
             else:
                 log.exception("Bridge error")
+                pub_meta("reconnect_reason", f"error:{type(e).__name__}", retain=True)
+                
             opc_online.clear()
             write_nodes.clear()
             for t in list(pending_write_tasks):
