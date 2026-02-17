@@ -7,18 +7,37 @@ class MqttConnectError(RuntimeError):
     pass
 
 
+def _rc_to_int(reason_code) -> int:
+    # MQTTv5 ReasonCode object → .value
+    if hasattr(reason_code, "value"):
+        try:
+            return int(reason_code.value)
+        except Exception:
+            pass
+
+    # sometimes .name == "Success"
+    if hasattr(reason_code, "name"):
+        if str(reason_code.name).lower() in ("success",):
+            return 0
+
+    # fallback
+    try:
+        return int(reason_code)
+    except Exception:
+        return -1
+
+
 async def mqtt_connect_or_fail(mqtt_client: mqtt.Client, cfg: Dict[str, Any], log) -> None:
     connected_evt = asyncio.Event()
     result: Dict[str, Any] = {"rc": None}
 
     def on_connect(_client, _userdata, _flags, reason_code, properties=None):
-        # reason_code ist ein ReasonCode-Objekt oder int-ähnlich
-        rc = int(reason_code)
+        rc = _rc_to_int(reason_code)
         result["rc"] = rc
         connected_evt.set()
 
     def on_disconnect(_client, _userdata, reason_code, properties=None):
-        log.warning("MQTT disconnected rc=%s", int(reason_code))
+        log.warning("MQTT disconnected rc=%s", _rc_to_int(reason_code))
 
     mqtt_client.on_connect = on_connect
     mqtt_client.on_disconnect = on_disconnect
@@ -36,13 +55,15 @@ async def mqtt_connect_or_fail(mqtt_client: mqtt.Client, cfg: Dict[str, Any], lo
         raise MqttConnectError("MQTT connect timeout (no CONNACK received).") from e
 
     rc = result["rc"]
+
     if rc == 0:
         log.info("MQTT connected to %s:%s", host, port)
         return
+
     if rc in (4, 5):
         raise MqttConnectError(
             f"MQTT authentication/authorization failed (rc={rc}). "
             "Check username/password + ACLs on the broker."
         )
-    raise MqttConnectError(f"MQTT connect failed (rc={rc}).")
 
+    raise MqttConnectError(f"MQTT connect failed (rc={rc}).")
