@@ -116,4 +116,5 @@ ln -sf "${CLIENT_KEY_PEM}"  "${PKI_DIR}/client_key.pem"
 ln -sf "${CLIENT_CERT_DER}" "${PKI_DIR}/client_cert.der"
 
 echo "[opcua_mqtt_bridge] Starting bridge..."
-exec python3 -u /app/main.py
+export PYTHONPATH=/app
+exec python3 -u -m opcua_mqtt_bridge.main
