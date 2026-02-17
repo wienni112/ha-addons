@@ -377,7 +377,12 @@ async def run_bridge_forever():
                     except Exception:
                         pass
 
-            await client.connect()
+            try:
+                await asyncio.wait_for(client.connect(), timeout=10)
+            except asyncio.TimeoutError as e:
+                log.warning("OPC UA connect timeout to %s -> retry", url)
+                raise RuntimeError("opc_connect_timeout") from e
+                
             log.info("Connected to OPC UA: %s", url)
             write_nodes.clear()
             opc_online.set()
@@ -496,6 +501,8 @@ async def run_bridge_forever():
         except Exception as e:
             if str(e) == "reconnect_requested":
                 log.warning("Reconnect loop triggered.")
+            elif str(e) == "opc_connect_timeout":
+                log.warning("OPC connect timeout -> retrying")
             else:
                 log.error("Bridge error: %s", e)
             opc_online.clear()
