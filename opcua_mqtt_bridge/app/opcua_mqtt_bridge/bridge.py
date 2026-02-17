@@ -10,6 +10,7 @@ from typing import Any, Dict, Optional, Tuple
 
 import paho.mqtt.client as mqtt
 from asyncua import Client, ua
+from asyncua.crypto.security_policies import SecurityPolicyNone
 
 from .config import load_options
 from .topics import normalize_topic, topic_value, topic_status, topic_error
@@ -115,7 +116,7 @@ async def run_bridge_forever():
 
     mqtt_client.will_set(availability_topic, "offline", qos=1, retain=True)
     await mqtt_connect_or_fail(mqtt_client, mqtt_cfg, log)
-
+    mqtt_client.loop_start()   # <<< HIER
     mqtt_client.publish(availability_topic, "online", qos=1, retain=True)
     loop = asyncio.get_running_loop()
 
@@ -152,10 +153,12 @@ async def run_bridge_forever():
             pol = map_security_policy(security_policy)
             mode = map_security_mode(security_mode)
 
-            security_enabled = not (pol == type(pol).__mro__[0] and mode == ua.MessageSecurityMode.None_)  # harmless; will be overridden below
-            security_enabled = not (pol.__name__ == "SecurityPolicyNone" or mode == ua.MessageSecurityMode.None_)
+            security_enabled = (pol is not SecurityPolicyNone) and (mode != ua.MessageSecurityMode.None_)
+
 
             if security_enabled:
+                log.info("OPC UA requested security: policy=%s mode=%s", security_policy, security_mode)
+                log.info("OPC UA security_enabled=%s", security_enabled)
                 if not os.path.exists(pki["client_cert"]):
                     raise FileNotFoundError(
                         f"Client certificate missing: {pki['client_cert']}. Delete /data/pki and restart to regenerate."
@@ -180,7 +183,7 @@ async def run_bridge_forever():
                 client.set_user(username)
                 client.set_password(password)
 
-            if pol.__name__ == "SecurityPolicyNone" or mode == ua.MessageSecurityMode.None_:
+            if not security_enabled:
                 log.warning("OPC UA security disabled (policy/mode None).")
             else:
                 if (not auto_trust_server) and (not os.path.exists(pki["server_cert_path"])):
@@ -199,8 +202,20 @@ async def run_bridge_forever():
                         private_key=pki["client_key"],
                         server_certificate=pki["server_cert_path"],
                     )
-
+            # Optional endpoint logging (independent of security)        
+            if bool(opc_cfg.get("log_endpoints", False)):
+                tmp = Client(url)
+                try:
+                    eps = await tmp.connect_and_get_server_endpoints()
+                    for e in eps:
+                        log.info("Endpoint: mode=%s policy=%s", e.SecurityMode, e.SecurityPolicyUri)
+                finally:
+                    try:
+                        await tmp.disconnect()
+                    except Exception:
+                        pass
             await client.connect()
+            
             log.info("Connected to OPC UA: %s", url)
 
             # Auto export / merge
