@@ -191,8 +191,10 @@ async def run_bridge_forever():
         mqtt_client.username_pw_set(mqtt_cfg["username"], mqtt_cfg.get("password") or "")
 
     def pub_meta(name: str, payload: str, retain: bool = True, qos: int = 1):
-        # meta/<name> unter deinem prefix
-        mqtt_client.publish(normalize_topic(prefix, f"meta/{name}"), payload, qos=qos, retain=retain)
+        try:
+            mqtt_client.publish(normalize_topic(prefix, f"meta/{name}"), payload, qos=qos, retain=retain)
+        except Exception:
+            pass
     
     def _rc_to_int(rc) -> int:
         return int(getattr(rc, "value", rc if rc is not None else -1))
@@ -544,7 +546,6 @@ async def run_bridge_forever():
         except Exception as e:
             if str(e) == "reconnect_requested":
                 log.warning("Reconnect loop triggered.")
-                await asyncio.sleep(2)  # feste Pause
             elif str(e) == "opc_connect_timeout":
                 log.warning("OPC connect timeout -> retrying")
                 reconnect_count += 1
