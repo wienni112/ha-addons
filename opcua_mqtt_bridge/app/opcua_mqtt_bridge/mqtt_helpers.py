@@ -12,13 +12,13 @@ async def mqtt_connect_or_fail(mqtt_client: mqtt.Client, cfg: Dict[str, Any], lo
     result: Dict[str, Any] = {"rc": None}
 
     def on_connect(_client, _userdata, _flags, reason_code, properties=None):
-    # reason_code ist ein ReasonCode-Objekt oder int-ähnlich
-    rc = int(reason_code)
-    result["rc"] = rc
-    connected_evt.set()
+        # reason_code ist ein ReasonCode-Objekt oder int-ähnlich
+        rc = int(reason_code)
+        result["rc"] = rc
+        connected_evt.set()
 
-def on_disconnect(_client, _userdata, reason_code, properties=None):
-    log.warning("MQTT disconnected rc=%s", int(reason_code))
+    def on_disconnect(_client, _userdata, reason_code, properties=None):
+        log.warning("MQTT disconnected rc=%s", int(reason_code))
 
     mqtt_client.on_connect = on_connect
     mqtt_client.on_disconnect = on_disconnect
