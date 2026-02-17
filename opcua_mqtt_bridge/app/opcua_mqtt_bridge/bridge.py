@@ -116,7 +116,7 @@ async def run_bridge_forever():
 
     mqtt_client.will_set(availability_topic, "offline", qos=1, retain=True)
     await mqtt_connect_or_fail(mqtt_client, mqtt_cfg, log)
-    mqtt_client.loop_start()   # <<< HIER
+
     mqtt_client.publish(availability_topic, "online", qos=1, retain=True)
     loop = asyncio.get_running_loop()
 
