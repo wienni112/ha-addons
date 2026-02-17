@@ -31,19 +31,27 @@ def _variant_for_type(value, t: str):
     if tt in ("float", "real"):
         return ua.Variant(float(value), ua.VariantType.Float)
 
-    if tt in ("double"):
+    if tt in ("double", "lreal"):
         return ua.Variant(float(value), ua.VariantType.Double)
 
-    if tt in ("int", "int32", "dint"):
+    if tt in ("int", "int16"):
+        return ua.Variant(int(value), ua.VariantType.Int16)
+
+    if tt in ("dint", "int32"):
         return ua.Variant(int(value), ua.VariantType.Int32)
 
-    if tt in ("int16", "word"):
-        return ua.Variant(int(value), ua.VariantType.Int16)
+    if tt in ("uint", "uint16", "word"):
+        return ua.Variant(int(value), ua.VariantType.UInt16)
+
+    if tt in ("udint", "uint32", "dword"):
+        return ua.Variant(int(value), ua.VariantType.UInt32)
+
+    if tt in ("byte", "uint8"):
+        return ua.Variant(int(value), ua.VariantType.Byte)
 
     if tt in ("bool", "boolean"):
         return ua.Variant(bool(value), ua.VariantType.Boolean)
 
-    # fallback → asyncua guess
     return ua.Variant(value)
 
 class SubHandler:
