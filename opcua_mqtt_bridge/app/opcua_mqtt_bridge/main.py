@@ -1,5 +1,5 @@
 import asyncio
-from bridge import run_bridge_forever
+from .bridge import run_bridge_forever
 
 
 def main():
