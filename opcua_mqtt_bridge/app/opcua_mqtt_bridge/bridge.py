@@ -179,6 +179,7 @@ async def run_bridge_forever():
 
     mqtt_client.on_connect = on_connect_runtime
     mqtt_client.on_disconnect = on_disconnect_runtime
+    mqtt_client.on_message = on_message
 
     write_nodes: Dict[str, Tuple[Any, str]] = {}
     backoff = 1
@@ -386,7 +387,7 @@ async def run_bridge_forever():
                 except Exception as e:
                     log.error("MQTT on_message error: %s", e)
 
-            mqtt_client.on_message = on_message
+            
 
             backoff = 1
             while not stop_event.is_set():
