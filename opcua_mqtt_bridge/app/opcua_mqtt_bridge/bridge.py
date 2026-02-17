@@ -359,7 +359,7 @@ async def run_bridge_forever():
                 mqtt_client.disconnect()
             except Exception:
                 pass
-            mqtt_client.loop_stop(force=True)
+            mqtt_client.loop_stop()
             break  # <-- bricht das `while True` (äußere Schleife)
         
         except Exception as e:
