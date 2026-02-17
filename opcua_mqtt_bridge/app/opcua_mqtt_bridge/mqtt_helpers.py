@@ -31,12 +31,20 @@ async def mqtt_connect_or_fail(mqtt_client: mqtt.Client, cfg: Dict[str, Any], lo
     connected_evt = asyncio.Event()
     result: Dict[str, Any] = {"rc": None}
 
-    def on_connect(_client, _userdata, _flags, reason_code, properties=None):
+    def on_connect(_client, _userdata, _flags, reason_code=None, properties=None, *args, **kwargs):
+        # VERSION2: (client, userdata, flags, reason_code, properties)
+        # defensiv: reason_code kann auch in args landen
+        if reason_code is None and args:
+            reason_code = args[0]
         rc = _rc_to_int(reason_code)
         result["rc"] = rc
         connected_evt.set()
 
-    def on_disconnect(_client, _userdata, reason_code, properties=None):
+    def on_disconnect(_client, _userdata, reason_code=None, properties=None, *args, **kwargs):
+        if len(args) >= 2:
+            reason_code = args[1]
+        elif args:
+            reason_code = args[0]
         log.warning("MQTT disconnected rc=%s", _rc_to_int(reason_code))
 
     mqtt_client.on_connect = on_connect
