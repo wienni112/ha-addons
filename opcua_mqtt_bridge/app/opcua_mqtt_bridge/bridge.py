@@ -25,8 +25,9 @@ from .tags import load_tags, tags_is_empty, write_yaml, merge_tags
 from .discovery import browse_export, export_to_tags
 from .mqtt_helpers import mqtt_connect_or_fail
 
-def _variant_for_type(value, t: str):
-    tt = (t or "").lower()
+
+def _variant_for_type(value, t: str) -> ua.Variant:
+    tt = (t or "").lower().strip()
 
     if tt in ("float", "real"):
         return ua.Variant(float(value), ua.VariantType.Float)
@@ -50,12 +51,25 @@ def _variant_for_type(value, t: str):
         return ua.Variant(int(value), ua.VariantType.Byte)
 
     if tt in ("bool", "boolean"):
+        # parse_payload liefert bei bool i.d.R. schon bool – wir bleiben defensiv
+        if isinstance(value, str):
+            v = value.strip().lower()
+            value = v in ("1", "true", "on", "yes")
         return ua.Variant(bool(value), ua.VariantType.Boolean)
 
+    # fallback: asyncua soll raten
     return ua.Variant(value)
 
+
 class SubHandler:
-    def __init__(self, mqtt_client: mqtt.Client, topic_prefix: str, qos_state: int, retain_states: bool, log: logging.Logger):
+    def __init__(
+        self,
+        mqtt_client: mqtt.Client,
+        topic_prefix: str,
+        qos_state: int,
+        retain_states: bool,
+        log: logging.Logger,
+    ):
         self.mqtt = mqtt_client
         self.prefix = topic_prefix.rstrip("/")
         self.qos = int(qos_state)
@@ -93,16 +107,14 @@ class SubHandler:
 async def run_bridge_forever():
     opts = load_options()
     stop_event = asyncio.Event()
-    
+
     loop = asyncio.get_running_loop()
     for sig in ("SIGTERM", "SIGINT"):
         try:
-            loop.add_signal_handler(
-                getattr(signal, sig),
-                stop_event.set
-            )
+            loop.add_signal_handler(getattr(signal, sig), stop_event.set)
         except Exception:
             pass
+
     # Logging
     log_cfg = opts.get("log", {}) or {}
     level_name = (log_cfg.get("level") or "INFO").upper()
@@ -152,33 +164,94 @@ async def run_bridge_forever():
     if mqtt_cfg.get("username"):
         mqtt_client.username_pw_set(mqtt_cfg["username"], mqtt_cfg.get("password") or "")
 
-    mqtt_client.will_set(availability_topic, "offline", qos=1, retain=True)
-    await mqtt_connect_or_fail(mqtt_client, mqtt_cfg, log)
-
-    mqtt_client.reconnect_delay_set(min_delay=1, max_delay=10)
-    mqtt_client.enable_logger(logging.getLogger("paho.mqtt.client"))  # optional, aber super
-
     def _rc_to_int(rc) -> int:
         return int(getattr(rc, "value", rc if rc is not None else -1))
 
+    # Write map (wird bei OPCUA-Connect gefüllt; on_message greift darauf zu)
+    write_nodes: Dict[str, Tuple[Any, str]] = {}
+
+    # MQTT on_message: <prefix>/<path>/set
+    def on_message(_client_m, _userdata, msg):
+        try:
+            base = prefix.rstrip("/") + "/"
+            if not msg.topic.startswith(base):
+                return
+
+            rel = msg.topic[len(base):]
+            if not rel.endswith("/set"):
+                return
+
+            path = rel[:-4]
+            if path not in write_nodes:
+                return
+
+            # never accept retained writes
+            if getattr(msg, "retain", False):
+                log.info("Ignoring retained write on %s", msg.topic)
+                return
+
+            payload = msg.payload.decode("utf-8", errors="replace")
+            node, t = write_nodes[path]
+
+            async def do_write():
+                try:
+                    value = parse_payload(payload, t)
+
+                    # DateTime: support ISO with Z
+                    if (t or "").strip().lower() in ("datetime", "date", "time"):
+                        vv = str(value)
+                        if vv.endswith("Z"):
+                            vv = vv[:-1] + "+00:00"
+                        try:
+                            value = datetime.datetime.fromisoformat(vv)
+                        except Exception:
+                            pass
+
+                    variant = _variant_for_type(value, t)
+                    dv = ua.DataValue(variant)
+                    await node.write_value(dv)
+
+                    mqtt_client.publish(topic_status(prefix, path), "ok", qos=1, retain=False)
+                except Exception as e:
+                    log.error("Write error %s: %s", path, e)
+                    mqtt_client.publish(topic_error(prefix, path), str(e), qos=1, retain=False)
+
+            # paho callbacks laufen im paho-thread -> ins asyncio loop schieben
+            loop.call_soon_threadsafe(lambda: asyncio.create_task(do_write()))
+
+        except Exception as e:
+            log.error("MQTT on_message error: %s", e)
+
+    # MQTT runtime connect/disconnect
     def on_connect_runtime(client, userdata, flags, reason_code, properties=None):
         log.info("MQTT (re)connected rc=%s", _rc_to_int(reason_code))
 
-        # retained availability wieder online
+        # Availability IMMER beim (Re)Connect wieder online setzen
         client.publish(availability_topic, "online", qos=1, retain=True)
 
-        # nach Broker-Restart: subscriptions neu setzen
+        # Nach Broker-Restart sind Subscriptions weg -> neu subscribe
         client.subscribe(normalize_topic(prefix, "#"), qos=qos_cmd)
 
     def on_disconnect_runtime(client, userdata, disconnect_flags=None, reason_code=None, properties=None):
-        log.warning(
-            "MQTT disconnected flags=%s rc=%s",
-            disconnect_flags,
-            _rc_to_int(reason_code),
-        )
+        log.warning("MQTT disconnected flags=%s rc=%s", disconnect_flags, _rc_to_int(reason_code))
+        # Optional: availability auf offline setzen (aber Vorsicht: bei kurzen Glitches flackert HA)
+        # client.publish(availability_topic, "offline", qos=1, retain=True)
 
     mqtt_client.on_connect = on_connect_runtime
     mqtt_client.on_disconnect = on_disconnect_runtime
+    mqtt_client.on_message = on_message
+
+    mqtt_client.reconnect_delay_set(min_delay=1, max_delay=10)
+    mqtt_client.enable_logger(logging.getLogger("paho.mqtt.client"))
+
+    mqtt_client.will_set(availability_topic, "offline", qos=1, retain=True)
+
+    # Connect + wait for first CONNACK
+    await mqtt_connect_or_fail(mqtt_client, mqtt_cfg, log)
+
+    # weil wir bereits verbunden sind (on_connect war schon), einmal sicherheitshalber:
+    mqtt_client.subscribe(normalize_topic(prefix, "#"), qos=qos_cmd)
+    mqtt_client.publish(availability_topic, "online", qos=1, retain=True)
 
     backoff = 1
     backoff_max = 30
@@ -260,7 +333,8 @@ async def run_bridge_forever():
                         private_key=pki["client_key"],
                         server_certificate=pki["server_cert_path"],
                     )
-            # Optional endpoint logging (independent of security)        
+
+            # Optional endpoint logging (independent of security)
             if bool(opc_cfg.get("log_endpoints", False)):
                 tmp = Client(url)
                 try:
@@ -272,8 +346,8 @@ async def run_bridge_forever():
                         await tmp.disconnect()
                     except Exception:
                         pass
+
             await client.connect()
-            
             log.info("Connected to OPC UA: %s", url)
 
             # Auto export / merge
@@ -304,8 +378,12 @@ async def run_bridge_forever():
                     write_yaml(tags_file, merged)
                     existing_tags = merged
 
-                log.info("Auto-export completed. export=%s generated=%s merge_into=%s",
-                         export_file, generated_tags_file, tags_file if merge_into else "(disabled)")
+                log.info(
+                    "Auto-export completed. export=%s generated=%s merge_into=%s",
+                    export_file,
+                    generated_tags_file,
+                    tags_file if merge_into else "(disabled)",
+                )
                 need_export = False
 
             tags = load_tags(tags_file)
@@ -334,63 +412,10 @@ async def run_bridge_forever():
 
             log.info("Subscribed read=%d, rw=%d", len(tags.get("read", [])), len(tags.get("rw", [])))
 
-            write_nodes: Dict[str, Tuple[Any, str]] = {}
-            # MQTT write handler: <prefix>/<path>/set
-            def on_message(_client_m, _userdata, msg):
-                try:
-                    base = prefix.rstrip("/") + "/"
-                    if not msg.topic.startswith(base):
-                        return
-
-                    rel = msg.topic[len(base):]
-                    if not rel.endswith("/set"):
-                        return
-
-                    path = rel[:-4]
-                    if path not in write_nodes:
-                        return
-
-                    # never accept retained writes
-                    if getattr(msg, "retain", False):
-                        log.info("Ignoring retained write on %s", msg.topic)
-                        return
-
-                    payload = msg.payload.decode("utf-8", errors="replace")
-                    node, t = write_nodes[path]
-
-                    async def do_write():
-                        try:
-                            value = parse_payload(payload, t)
-
-                            # DateTime: support ISO with Z
-                            if (t or "").strip().lower() in ("datetime", "date", "time"):
-                                vv = str(value)
-                                if vv.endswith("Z"):
-                                    vv = vv[:-1] + "+00:00"
-                                try:
-                                    value = datetime.datetime.fromisoformat(vv)
-                                except Exception:
-                                    pass
-                            variant = _variant_for_type(value, t)
-                            dv = ua.DataValue(variant)
-                            await node.write_value(dv)
-                            
-                            mqtt_client.publish(topic_status(prefix, path), "ok", qos=1, retain=False)
-
-                        except Exception as e:
-                            log.error("Write error %s: %s", path, e)
-                            mqtt_client.publish(topic_error(prefix, path), str(e), qos=1, retain=False)
-
-                    loop.call_soon_threadsafe(lambda: asyncio.create_task(do_write()))
-
-                except Exception as e:
-                    log.error("MQTT on_message error: %s", e)
-            mqtt_client.on_message = on_message
-            
-
             backoff = 1
             while not stop_event.is_set():
                 await asyncio.sleep(1)
+
             # ---> STOP: sauber runterfahren
             log.info("Stop signal received, shutting down...")
 
@@ -412,8 +437,8 @@ async def run_bridge_forever():
             except Exception:
                 pass
             mqtt_client.loop_stop()
-            break  # <-- bricht das `while True` (äußere Schleife)
-        
+            break
+
         except Exception as e:
             log.error("Bridge error: %s", e)
 
@@ -432,5 +457,6 @@ async def run_bridge_forever():
             mqtt_client.publish(availability_topic, "offline", qos=1, retain=True)
             if stop_event.is_set():
                 break
+
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, backoff_max)
