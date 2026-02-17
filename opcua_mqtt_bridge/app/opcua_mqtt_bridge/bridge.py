@@ -25,6 +25,26 @@ from .tags import load_tags, tags_is_empty, write_yaml, merge_tags
 from .discovery import browse_export, export_to_tags
 from .mqtt_helpers import mqtt_connect_or_fail
 
+def _variant_for_type(value, t: str):
+    tt = (t or "").lower()
+
+    if tt in ("float", "real"):
+        return ua.Variant(float(value), ua.VariantType.Float)
+
+    if tt in ("double"):
+        return ua.Variant(float(value), ua.VariantType.Double)
+
+    if tt in ("int", "int32", "dint"):
+        return ua.Variant(int(value), ua.VariantType.Int32)
+
+    if tt in ("int16", "word"):
+        return ua.Variant(int(value), ua.VariantType.Int16)
+
+    if tt in ("bool", "boolean"):
+        return ua.Variant(bool(value), ua.VariantType.Boolean)
+
+    # fallback → asyncua guess
+    return ua.Variant(value)
 
 class SubHandler:
     def __init__(self, mqtt_client: mqtt.Client, topic_prefix: str, qos_state: int, retain_states: bool, log: logging.Logger):
@@ -320,8 +340,10 @@ async def run_bridge_forever():
                                     value = datetime.datetime.fromisoformat(vv)
                                 except Exception:
                                     pass
-
-                            await node.write_value(value)
+                            variant = _variant_for_type(value, t)
+                            dv = ua.DataValue(variant)
+                            await node.write_value(dv)
+                            
                             mqtt_client.publish(topic_status(prefix, path), "ok", qos=1, retain=False)
 
                         except Exception as e:
