@@ -119,6 +119,7 @@ async def run_bridge_forever():
     opts = load_options()
     stop_event = asyncio.Event()
     opc_online = asyncio.Event()
+    reconnect_event = asyncio.Event()
     pending_write_tasks: set[asyncio.Task] = set()
     write_lock = asyncio.Lock()  # optional, aber sehr hilfreich
 
@@ -277,10 +278,9 @@ async def run_bridge_forever():
 
     # Connect + wait for first CONNACK
     await mqtt_connect_or_fail(mqtt_client, mqtt_cfg, log)
-
+    mqtt_client.loop_start()
     # weil wir bereits verbunden sind (on_connect war schon), einmal sicherheitshalber:
     mqtt_client.subscribe(normalize_topic(prefix, "#"), qos=qos_cmd)
-    mqtt_client.publish(availability_topic, "offline", qos=1, retain=True)
 
     backoff = 1
     backoff_max = 30
@@ -290,6 +290,7 @@ async def run_bridge_forever():
         subscription = None
 
         try:
+            reconnect_event.clear()
             opc_cfg = opts["opcua"]
             url = opc_cfg["url"]
 
@@ -380,6 +381,7 @@ async def run_bridge_forever():
             log.info("Connected to OPC UA: %s", url)
             write_nodes.clear()
             opc_online.set()
+            reconnect_event.clear()
             mqtt_client.publish(availability_topic, "online", qos=1, retain=True)
 
             # Auto export / merge
@@ -429,6 +431,7 @@ async def run_bridge_forever():
                 pending_write_tasks.clear()
 
                 mqtt_client.publish(availability_topic, "offline", qos=1, retain=True)
+                reconnect_event.set()
 
             handler = SubHandler(mqtt_client, prefix, qos_state, retain_states, log, on_status=_on_sub_status)
 
@@ -455,8 +458,12 @@ async def run_bridge_forever():
             log.info("Subscribed read=%d, rw=%d", len(tags.get("read", [])), len(tags.get("rw", [])))
 
             backoff = 1
-            while not stop_event.is_set():
+            while not stop_event.is_set() and not reconnect_event.is_set():
                 await asyncio.sleep(1)
+
+            if reconnect_event.is_set():
+                log.warning("Reconnect requested (subscription status change).")
+                raise RuntimeError("reconnect_requested")
 
             # ---> STOP: sauber runterfahren
             log.info("Stop signal received, shutting down...")
@@ -487,7 +494,10 @@ async def run_bridge_forever():
             break
 
         except Exception as e:
-            log.error("Bridge error: %s", e)
+            if str(e) == "reconnect_requested":
+                log.warning("Reconnect loop triggered.")
+            else:
+                log.error("Bridge error: %s", e)
             opc_online.clear()
             write_nodes.clear()
             for t in list(pending_write_tasks):
