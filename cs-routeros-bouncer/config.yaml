@@ -1,5 +1,5 @@
 name: CrowdSec RouterOS Bouncer
-version: "1.0.1"
+version: "1.0.2"
 slug: cs_routeros_bouncer
 description: CrowdSec Bouncer for MikroTik RouterOS API
 url: "https://github.com/DEINUSER/DEIN-HA-ADDONS"
