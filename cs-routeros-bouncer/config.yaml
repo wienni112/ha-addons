@@ -1,0 +1,43 @@
+name: CrowdSec RouterOS Bouncer
+version: "1.0.0"
+slug: cs_routeros_bouncer
+description: CrowdSec Bouncer for MikroTik RouterOS API
+url: "https://github.com/DEINUSER/DEIN-HA-ADDONS"
+arch:
+  - amd64
+  - aarch64
+  - armv7
+startup: services
+boot: auto
+init: false
+host_network: true
+ports:
+  2112/tcp: 2112
+ports_description:
+  2112/tcp: Prometheus metrics
+options:
+  crowdsec_url: "http://172.30.33.13:8080/"
+  crowdsec_bouncer_api_key: ""
+  mikrotik_host: "172.22.1.1:8728"
+  mikrotik_user: "crowdsec"
+  mikrotik_pass: ""
+  mikrotik_tls: false
+  firewall_ipv4_enabled: true
+  firewall_ipv6_enabled: false
+  firewall_filter_enabled: true
+  firewall_raw_enabled: true
+  firewall_deny_action: "drop"
+  log_level: "info"
+schema:
+  crowdsec_url: str
+  crowdsec_bouncer_api_key: password
+  mikrotik_host: str
+  mikrotik_user: str
+  mikrotik_pass: password
+  mikrotik_tls: bool
+  firewall_ipv4_enabled: bool
+  firewall_ipv6_enabled: bool
+  firewall_filter_enabled: bool
+  firewall_raw_enabled: bool
+  firewall_deny_action: list(drop|reject)
+  log_level: list(debug|info|warn|error)
